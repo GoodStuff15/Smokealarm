@@ -30,20 +30,17 @@ function Get-ApiEndpoints {
             }
         }
 
-    $requestArray.Add([PSCustomObject]@{
-        Path        = Resolve-PathParameters $_.Path
-        Method      = $_.Method
-        RequestBody = $requestBody
-    })
+        $requestArray.Add([PSCustomObject]@{
+            Path        = $_.Path
+            Method      = $_.Method
+            RequestBody = $requestBody
+            Parameters = $_.Detail.parameters
+        })
     }
 
     return $requestArray
 }
 
-function Resolve-PathParameters {
-    param ([string]$path)
-    return $path -replace '\{[^}]+\}', '2'
-}
 
 function Resolve-PropertyValue {
     param (
@@ -113,4 +110,56 @@ function BuildRequestBody {
     }
 
     return $body
+}
+
+
+
+function Resolve-QueryParameters {
+    param ($parameters)
+
+    if (-not $parameters) { return '' }
+
+    $queryParams = $parameters | Where-Object { $_.in -eq 'query' }
+
+    if (-not $queryParams) { return '' }
+
+    $parts = foreach ($param in $queryParams) {
+        # Check captured IDs first
+        $keyword  = $param.name -replace 'id$', '' -replace 'Id$', ''
+        $match    = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+        $captured = if ($match) { [string]$global:capturedIds[$match] } else { $null }
+
+        $value = if ($captured) {
+            $captured
+        } else {
+            switch ($param.schema.type) {
+                'integer' { '2' }
+                'number'  { '0.0' }
+                'boolean' { 'true' }
+                'string'  {
+                    switch ($param.schema.format) {
+                        'date-time' { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ') }
+                        'date'      { (Get-Date).ToString('yyyy-MM-dd') }
+                        default     { 'test' }
+                    }
+                }
+                default { '2' }
+            }
+        }
+
+        "$($param.name)=$value"
+    }
+
+    return '?' + ($parts -join '&')
+}
+
+
+function Resolve-PathParameters {
+    param ([string]$path)
+
+    return [regex]::Replace($path, '\{([^}]+)\}', {
+        param($match)
+        $paramName = $match.Groups[1].Value  # just the name, no braces
+        return Get-CapturedId -paramName $paramName -path $path
+    })
 }
