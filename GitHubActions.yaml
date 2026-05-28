@@ -1,0 +1,54 @@
+name: SmokeAlarm API Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      fail_on_test_failures:
+        description: 'Fail pipeline on test failures'
+        type: boolean
+        default: true
+      skip_paths:
+        description: 'Comma-separated path segments to skip (e.g. auth,admin)'
+        type: string
+        default: ''
+      methods:
+        description: 'Methods to run'
+        type: choice
+        default: 'get,post,put,delete'
+        options:
+          - get,post,put,delete
+          - get
+          - post
+          - get,post
+      show_detailed_errors:
+        description: 'Show error responses from API'
+        type: boolean
+        default: false
+
+jobs:
+  api-tests:
+    name: Run PowerShell API Tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run API Test Suite
+        shell: pwsh
+        run: |
+          $methods   = "${{ inputs.methods || 'get,post,put,delete' }}" -split ',' | ForEach-Object { $_.Trim() }
+          $skipPaths = "${{ inputs.skip_paths }}" -split ',' | Where-Object { $_ }
+
+          .\TestRunner.ps1 `
+            -openApiSpecPath "${{ github.workspace }}\swagger.json" `
+            -baseUrl         "${{ vars.API_BASE_URL }}" `
+            -accessToken     "${{ secrets.API_ACCESS_TOKEN }}" `
+            -failOnTestFailures ([System.Convert]::ToBoolean("${{ inputs.fail_on_test_failures || 'true' }}")) `
+            -skipPaths       $skipPaths `
+            -methods         $methods `
+            -showDetailedErrors ([System.Convert]::ToBoolean("${{ inputs.show_detailed_errors || 'false' }}"))

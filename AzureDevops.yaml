@@ -1,0 +1,31 @@
+stages:
+  - stage: ApiTests
+    displayName: 'SmokeAlarm API Tests'
+    jobs:
+      - job: RunPowerShellTests
+        displayName: 'PowerShell API Test Suite'
+        pool:
+          vmImage: 'windows-latest'
+
+        steps:
+          - checkout: self
+
+          - task: PowerShell@2
+            displayName: 'Run API Test Suite'
+            inputs:
+              filePath: '$(System.DefaultWorkingDirectory)/TestRunner.ps1'
+              arguments: >
+                -openApiSpecPath "$(System.DefaultWorkingDirectory)/swagger.json"
+                -baseUrl "$(API_BASE_URL)"
+                -accessToken "$(API_ACCESS_TOKEN)"
+                -failOnTestFailures $(FAIL_ON_TEST_FAILURES)
+                -skipPaths "$(SKIP_PATHS)"
+                -methods $(METHODS)
+                -showDetailedErrors $(SHOW_DETAILED_ERRORS)
+              pwsh: true
+
+        variables:
+          FAIL_ON_TEST_FAILURES: true
+          SKIP_PATHS: 'auth,admin'       # comma separated, empty to skip nothing
+          METHODS: "'get','post'"        # quote-wrapped for PS array - only get and post supported currently
+          SHOW_DETAILED_ERRORS: false
