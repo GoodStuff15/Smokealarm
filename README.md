@@ -6,10 +6,10 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 ### Advantages
 - Simple to use, just put it in your pipeline, point it towards your api and spec and run it.
 - Filterable (http methods, paths) and configurable (detailed errors, fail pipeline on error)
+- Automatically chains requests — captures IDs from responses and reuses them in subsequent calls
 
 ### Limitations
 
-- Path parameters are replaced with `1` — real IDs are not resolved (yet, see upcoming features)
 - Auth is Bearer token only
 - Request bodies are best-effort based on schema types — complex validation rules may cause 400 errors
 
@@ -20,6 +20,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 1. **ResolveEndpoints.ps1** reads your `swagger.json` and builds a list of endpoints with auto-generated request bodies based on the schema
 2. **TestFramework.ps1** handles all HTTP calls, timing, and result tracking
 3. **TestRunner.ps1** orchestrates everything — filters, orders, and runs the tests, then prints a summary
+4. **EndpointPriority.ps1** controls execution order — auto-prioritized by path pattern with optional manual overrides
 
 ---
 
@@ -30,6 +31,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 ├── ResolveEndpoints.ps1   # Parses OpenAPI spec, builds endpoint + request body list
 ├── TestFramework.ps1      # HTTP request functions, result tracking, summary
 ├── TestRunner.ps1         # Orchestration, filtering, ordering, output
+├── EndpointPriority.ps1   # Execution order config
 └── swagger.json           # Your OpenAPI spec
 ```
 
@@ -88,9 +90,54 @@ Request bodies are automatically generated from your OpenAPI component schemas. 
 | Enum `$ref` | First enum value |
 | Nested object `$ref` | Recursively resolved |
 
-### Path Parameter Resolution
+### Response Chaining
 
-Path parameters like `/api/Team/{id}` are automatically replaced with a placeholder value of `1`.
+IDs are automatically captured from POST responses and injected into subsequent requests at runtime.
+
+```
+  -> POST /api/Competition/create  PASSED
+     Captured: competition = 1017
+  -> POST /api/CompetitionRound/create  PASSED
+     Captured: competitionround = 1034
+  -> PUT /api/CompetitionRound/changeactive/1034  PASSED
+  -> GET /api/Competition/1017  PASSED
+```
+
+Works for:
+- **Path parameters** — `/api/Team/{teamId}` → `/api/Team/42`
+- **Query parameters** — `?scheduleId={id}` → `?scheduleId=7`
+- **Request body arrays** — `playerIds: [0]` → `playerIds: [42]`
+
+### Smart Test Ordering
+
+Endpoints are automatically ordered based on path patterns and HTTP method so that create operations run before reads, updates, and deletes.
+
+| Pattern | Priority |
+|---|---|
+| `*/register*` | 1st |
+| `*/login*` | 2nd |
+| `*/create*` | 3rd |
+| `*/add*` | 4th |
+| `*/update*` | 5th |
+| `*/remove*` | 6th |
+| `*/delete*` | 7th |
+| everything else | last |
+
+Within each group, methods run in order: `POST → GET → PUT → DELETE`.
+
+### Manual Priority Overrides
+
+For endpoints with explicit dependencies, set exact priorities in `EndpointPriority.ps1`:
+
+```powershell
+$script:priorityOverrides = @{
+    '/api/Auth/register'           = 1
+    '/api/Auth/login'              = 2
+    'etc...'
+}
+```
+
+Manual overrides always take precedence over auto-priority. Everything without an override falls through to pattern-based ordering.
 
 ### Detailed Error Output
 
@@ -104,6 +151,8 @@ With `-showDetailedErrors $true`, failed requests show structured error informat
       1. scheduleDate: The JSON value could not be converted to System.Nullable`1[System.DateTime]
       2. dto: The dto field is required.
 ```
+
+Known status codes with empty bodies (401, 403, 404 etc.) show a plain-language reason instead.
 
 ### Test Summary
 
@@ -125,11 +174,11 @@ Every run prints a summary:
 
 ### GitHub Actions
 
-see "GitHubActions.yaml" for example
+see `GitHubActions.yaml` for example
 
 ### Azure DevOps
 
-see "AzureDevops.yaml" for example
+see `AzureDevops.yaml` for example
 
 **Variables to configure:**
 - `API_BASE_URL` — pipeline variable
@@ -139,10 +188,26 @@ see "AzureDevops.yaml" for example
 
 ## Upcoming Features
 
-- **Manual priority overrides** — explicitly set execution order for specific endpoints via a config hashtable in `TestRunner.ps1`
-- **Response chaining** — capture IDs from POST responses and inject them into subsequent GET/PUT/DELETE path parameters instead of using placeholder values
-- **More auth types** - Adding more options beyond Bearer token
-- **Configurable default values** - Letting the user enter default values to match when validation is in the way :)
+- **More auth types** — adding more options beyond Bearer token
+- **Configurable default values** — letting the user enter default values to match when validation is in the way
 
 ---
 
+## Changelog
+
+### 0.2.0
+- **Response chaining** — IDs captured from POST responses are now automatically injected into path parameters, query parameters, and request body arrays of subsequent requests
+- **Manual priority overrides** — explicit execution order can now be set per endpoint in `EndpointPriority.ps1`
+- **Query parameter resolution** — query parameters defined in the OpenAPI spec are now auto-generated and appended to GET requests
+- **Enum support** — request body properties referencing enum schemas now use the first valid enum value instead of null
+- **DateTime support** — string properties with `date-time` or `date` format now generate valid timestamp values
+- **Improved error output** — known status codes with empty bodies (401, 403, 404 etc.) now show a plain-language reason; structured validation errors are displayed per field
+
+### 0.1.0
+- Initial release
+- Auto-generated request bodies from OpenAPI schemas
+- Path parameter placeholder resolution
+- Smart test ordering by path pattern and HTTP method
+- Detailed error output with `-showDetailedErrors`
+- Test summary with pass/fail counts and timing
+- GitHub Actions and Azure DevOps pipeline support
