@@ -48,6 +48,7 @@ function Resolve-PropertyValue {
         $schemas
     )
 
+
     $ref  = $propSchema.'$ref'
     $type = $propSchema.type
 
@@ -63,22 +64,35 @@ function Resolve-PropertyValue {
         return $null
     }
 
-$value = switch ($type) {
-    'integer' { 2 }
-    'number'  { 0.0 }
-    'boolean' { $false }
-    'string'  {
-        switch -Wildcard ($propSchema.format) {
-            'date-time' { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ') }
-            'date'      { (Get-Date).ToString('yyyy-MM-dd') }
-            default     { 'test' }
+    $value = switch ($type) {
+        'integer' { 2 }
+        'number'  { 0.0 }
+        'boolean' { $false }
+        'string'  {
+            switch -Wildcard ($propSchema.format) {
+                'date-time' { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ') }
+                'date'      { (Get-Date).ToString('yyyy-MM-dd') }
+                default     { 'test' }
+            }
         }
+        'array' {
+            $itemType = if ($propSchema.items) { $propSchema.items.type } else { 'integer' }
+
+            $list = [System.Collections.Generic.List[object]]::new()
+            switch ($itemType) {
+                'integer' { $null = $list.Add(1); $null = $list.Add(2) }
+                'number'  { $list.Add(1.0) }
+                'string'  { $list.Add('test') }
+                default   { $list.Add(1) }
+                }
+        ,$list
+
+        }
+        'object'  { @{} }
+        default   { $null }
     }
-    'array'   { @() }
-    'object'  { @{} }
-    default   { $null }
-}
-return $value
+
+    return ,$value
 }
 
 function extractDtoName {
@@ -99,16 +113,23 @@ function BuildRequestBody {
 
     $schema = $schemas.PSObject.Properties[$dtoName].Value
 
-    if ($schema.type -ne 'object') {
-        Write-Warning "$dtoName is not an object schema"
-        return $null
-    }
+    $body = [ordered]@{}
 
-    $body = @{}
     foreach ($prop in $schema.properties.PSObject.Properties) {
-        $body[$prop.Name] = Resolve-PropertyValue -propSchema $prop.Value -schemas $schemas
-    }
 
+    # resolve
+    $val = Resolve-PropertyValue -propSchema $prop.Value -schemas $schemas
+
+    if ($val -is [System.Collections.Generic.List[object]]) {
+        $body[$prop.Name] = $val
+    } elseif ($val -is [System.Collections.ArrayList] -or $val -is [array]) {
+        $list = [System.Collections.Generic.List[object]]::new()
+        foreach ($item in $val) { $null = $list.Add($item) }
+        $body[$prop.Name] = $list
+    } else {
+        $body[$prop.Name] = $val
+    }
+}
     return $body
 }
 

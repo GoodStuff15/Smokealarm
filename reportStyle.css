@@ -1,0 +1,134 @@
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #1e1e1e;
+    color: #d4d4d4; 
+    margin: 0; padding: 
+    24px; 
+}
+
+h1 { 
+    color: #fff; 
+    margin-bottom: 4px; 
+}
+
+.subtitle { 
+    color: #888; 
+    margin-bottom: 32px; 
+    font-size: 14px; 
+}
+
+.summary { 
+    display: flex; 
+    gap: 16px; margin-bottom: 32px;
+    flex-wrap: wrap; 
+}
+
+.card { 
+    background: #2d2d2d;
+    border-radius: 8px; 
+    padding: 16px 24px; 
+    min-width: 120px; 
+}
+
+.card-label {
+    font-size: 12px;
+    color: #888; 
+    margin-bottom: 4px; 
+}
+
+.card-value { 
+    font-size: 28px; 
+    font-weight: bold; 
+}
+
+.progress-bar { 
+    background: #3a3a3a; 
+    border-radius: 999px; 
+    height: 8px; 
+    margin-bottom: 32px; 
+    overflow: hidden; 
+}
+
+.progress-bar-fill { 
+    height: 100%; 
+    border-radius: 999px; 
+    background: #4caf50; 
+    width: 20%; 
+    transition: width 0.5s ease; 
+}
+
+table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    font-size: 14px; 
+}
+
+th { 
+    text-align: left; 
+    padding: 10px 12px; 
+    background: #2d2d2d; 
+    color: #888; 
+    font-weight: 500; 
+}
+
+td { 
+    padding: 10px 12px; 
+    border-bottom: 1px solid #2a2a2a; 
+    vertical-align: top; 
+}
+
+tr:hover td {
+    background: #262626; 
+}
+
+.method { 
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    font-family: monospace; 
+}
+
+.method-get { 
+    background: #1a3a5c; 
+    color: #64b5f6; 
+}
+
+.method-post {
+    background: #1a3d2b;
+    color: #81c784; 
+}
+
+.method-put { 
+    background: #3d2e1a; 
+    color: #ffb74d; 
+}
+
+.method-delete  { 
+    background: #3d1a1a; 
+    color: #e57373; 
+}
+
+.path { 
+    font-family: monospace; 
+    color: #ce9178; 
+}
+
+pre.error-body { 
+    background: #2a2a2a; 
+    border-left: 3px solid #f44336; 
+    padding: 10px; 
+    border-radius: 4px; 
+    font-size: 12px; 
+    white-space: pre-wrap; 
+    word-break: break-all;
+    margin: 4px 0 0 0;
+    color: #f48771; 
+}
+
+.timestamp  { 
+    color: #555; 
+    font-size: 12px; 
+    text-align: right; 
+    margin-top: 32px; 
+}

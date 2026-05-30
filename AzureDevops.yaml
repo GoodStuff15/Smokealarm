@@ -22,10 +22,17 @@ stages:
                 -skipPaths "$(SKIP_PATHS)"
                 -methods $(METHODS)
                 -showDetailedErrors $(SHOW_DETAILED_ERRORS)
+                -saveReports $(SAVE_REPORTS)
+                -reportLocation "$(System.DefaultWorkingDirectory)/TestReports"
+                -maxReports $(MAX_REPORTS)
+                -maxAgeDays $(MAX_AGE_DAYS)
               pwsh: true
 
         variables:
           FAIL_ON_TEST_FAILURES: true
           SKIP_PATHS: 'auth,admin'       # comma separated, empty to skip nothing
-          METHODS: "'get','post'"        # quote-wrapped for PS array - only get and post supported currently
+          METHODS: "'get','post','put','delete'"        # quote-wrapped for PS array
           SHOW_DETAILED_ERRORS: false
+          SAVE_REPORTS: true
+          MAX_REPORTS: 10
+          MAX_AGE_DAYS: 10

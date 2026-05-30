@@ -1,16 +1,23 @@
 # TestRunner.ps1
-# Orchestrates test execution using ResolveEndpoints and TestFramework
+# Orchestrates test execution using ResolveEndpoints, EndpointPriority, AuthFlow and TestFramework
 
 param(
+    # Configuration parameters
     [string]$openApiSpecPath = "$PSScriptRoot\swagger.json",
     [string]$baseUrl         = "https://localhost:7194",
-    [string]$accessToken     = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwidW5pcXVlX25hbWUiOiJhZG1pbiIsImp0aSI6IjU0NTFiZGJkLWNlMTctNGQyOS1iN2EyLWU4ZTdmYzNkMzgzOCIsImh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd3MvMjAwOC8wNi9pZGVudGl0eS9jbGFpbXMvcm9sZSI6IkFkbWluIiwiZXhwIjoxNzgwMDAxNzYwLCJpc3MiOiJHQ29tcGV0aXRpb25zQVBJIiwiYXVkIjoiR0NvbXBVc2VycyJ9.mOjaNCGw4hdmCQfllGifT5PHkVm4QqLziWdll9lK_Qo",
+    [string]$accessToken     = "your_token_here",  # optional hardcoded token for testing
+    [string]$username        = $null,  # from pipeline secret
+    [string]$password        = $null,  # from pipeline secret
 
-    # Pipeline options
+    # Customization options
+    [string]$reportLocation = ".\reports\",  # optional path to save HTML report (e.g. ".\reports\")
     [bool]$failOnTestFailures = $true,
     [string[]]$skipPaths      = @(),
     [string[]]$methods        = @('get','post', 'put', 'delete'),
-    [bool]$showDetailedErrors = $true
+    [bool]$showDetailedErrors = $true,
+    [bool]$saveReports = $true,
+    [int]$maxReports = 10,
+    [int]$maxAgeDays = 10
 
     )
 
@@ -41,67 +48,97 @@ function Save-ResponseId {
     try {
         $parsed = $body | ConvertFrom-Json
 
-        # Find first property ending in Id/id at top level
-        $idProp = $parsed.PSObject.Properties | 
-                    Where-Object { $_.Name -match '[Ii]d$' } | 
+        $idProp = $parsed.PSObject.Properties | Where-Object { $_.Name -eq 'id' -or $_.Name -eq 'Id' } | 
                     Select-Object -First 1
 
-        if (-not $idProp) { return }
+        if (-not $idProp) {
+            $idProp = $parsed.PSObject.Properties | 
+                        Where-Object { $_.Name -match '[Ii]d$' } | 
+                        Select-Object -First 1
+        }
+
+        if (-not $idProp) { 
+            return 
+        }
 
         $id  = $idProp.Value
-        $key = ($idProp.Name -replace '[Ii]d$', '').ToLower()
+        $key = if ($idProp.Name -eq 'id' -or $idProp.Name -eq 'Id') {
+            $segments = $path.Trim('/') -split '/'
+            $derived = $segments | Where-Object { $_ -notmatch 'api|create|add|update|delete' } | 
+                Select-Object -First 1
+            $derived.ToLower()
+        } else {
+            ($idProp.Name -replace '[Ii]d$', '').ToLower()
+        }
 
         if ($id -and $key) {
             $global:capturedIds[$key] = $id
-            Write-Host "    Captured: $key = $id" -ForegroundColor DarkCyan
         }
-    } catch { }
+    } catch {
+
+    }
 }
 
 function Resolve-RequestBody {
-    param ([hashtable]$body)
+    param ([object]$body)
 
     if (-not $body) { return $body }
 
-    $resolved = @{}
-    foreach ($key in $body.Keys) {
-        $value = $body[$key]
+    $obj = [ordered]@{}  # <-- hashtable instead of PSCustomObject
 
-        if ($value -is [array]) {
-            # Try to find a captured ID for this array property
-            # e.g. playerIds -> player
+    $properties = if ($body -is [hashtable] -or $body -is [System.Collections.Specialized.OrderedDictionary]) {
+        $body.Keys | ForEach-Object { [PSCustomObject]@{ Name = $_; Value = $body[$_] } }
+    } else {
+        $body.PSObject.Properties
+    }
+
+    foreach ($prop in $properties) {
+        $key   = $prop.Name
+        $value = $prop.Value
+
+        if ($null -eq $value) {
+            $obj[$key] = $null
+            continue
+        }
+
+        if ($value.GetType().Name -like 'List*' -or $value -is [array] -or
+            $value -is [System.Collections.ArrayList]) {
+
             $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-            $match   = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
-
-            $resolved[$key] = if ($match) {
-                @([int]$global:capturedIds[$match])  # array with one captured ID
+            $matching  = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" }
+            $arr = if ($matching) {
+                [int[]]@($matching | ForEach-Object { [int]$global:capturedIds[$_] })
             } else {
-                @(1)  # fallback
+                [int[]]@($value)
             }
+            $obj[$key] = [object[]]@($arr)  # force object array, not int array
+
         } elseif ($value -is [int] -or $value -is [long]) {
-            # Try to find a captured ID for integer properties
-            $keyword = $key -replace '[Ii]d$', ''
-            $match   = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+            $keyword  = $key -replace '[Ii]d$', ''
+            $match    = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+            $obj[$key] = if ($match) { [int]$global:capturedIds[$match] } else { $value }
 
-            $resolved[$key] = if ($match) {
-                [int]$global:capturedIds[$match]
-            } else {
-                $value
-            }
         } else {
-            $resolved[$key] = $value
+            $obj[$key] = $value
         }
     }
 
-    return $resolved
+    return $obj
 }
 
 . "$PSScriptRoot\ResolveEndpoints.ps1"
 . "$PSScriptRoot\TestFramework.ps1" -baseUrl $baseUrl -accessToken $accessToken
 . "$PSScriptRoot\EndpointPriority.ps1" 
+. "$PSScriptRoot\AuthFlow.ps1"
 
+# ======================
+# 1. Authenticate and get token if credentials provided
+#=======================
+if ($username -and $password) {
+    $accessToken = Get-AuthToken -baseUrl $baseUrl -username $username -password $password
+}
 # =====================
-# 1. Load endpoints
+# 2. Load endpoints
 # =====================
 $endpoints = Get-ApiEndpoints -openApiSpecPath $openApiSpecPath | Sort-Object {
     Get-EndpointPriority -path $_.Path -method $_.Method
@@ -123,21 +160,27 @@ $endpoints = $endpoints | Where-Object {
 }
 
 # =====================
-# 2. Run tests
+# 3. Run tests
 # =====================
 
 foreach ($endpoint in $endpoints) {
+
+
     $method       = $endpoint.Method
     $resolvedPath = (Resolve-PathParameters -path $endpoint.Path) + 
                 (Resolve-QueryParameters -parameters $endpoint.Parameters)
-
+    $resolvedBody = if ($method -eq 'post' -or $method -eq 'put') {
+        Resolve-RequestBody -body $endpoint.RequestBody
+    } else {
+        $null
+    }
 
     Write-Host "  -> $($method.ToUpper()) $resolvedPath" -NoNewline
 
     $passed = switch ($method) {
-        'post'   { RunPostRequest   -url $resolvedPath -body (Resolve-RequestBody -body $endpoint.RequestBody) }
+        'post'   { RunPostRequest   -url $resolvedPath -body $resolvedBody }
         'get'    { RunGetRequest    -url $resolvedPath }
-        'put'    { RunPutRequest    -url $resolvedPath -body (Resolve-RequestBody -body $endpoint.RequestBody) }
+        'put'    { RunPutRequest    -url $resolvedPath -body $resolvedBody }
         'delete' { RunDeleteRequest -url $resolvedPath }
     }
 
@@ -146,6 +189,7 @@ foreach ($endpoint in $endpoints) {
         Write-Host "  PASSED" -ForegroundColor Green
         if ($method -eq 'post') {   # <-- was $group.Name
             $last = $script:resultArray | Select-Object -Last 1
+
             Save-ResponseId -path $endpoint.Path -body $last.Body
         }
     } else {
@@ -160,13 +204,17 @@ foreach ($endpoint in $endpoints) {
 
 
 # =====================
-# 3. Print summary
+# 4. Print summary
 # =====================
 Write-Host ""
 Write-TestSummary
 
+if ($reportLocation) {
+    Write-HtmlReport -outputFolder $reportLocation -maxReports $maxReports -maxAgeDays $maxAgeDays
+}
+
 # =====================
-# 4. Fail if any test failed (for CI pipelines)
+# 5. Fail if any test failed (for CI pipelines)
 # =====================
 
 $summary = Get-TestSummary
@@ -178,5 +226,3 @@ if ($failOnTestFailures -and $summary.Failed -gt 0) {
     exit 1
 }
 
-
-# Helper functions

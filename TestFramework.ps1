@@ -41,7 +41,7 @@ function Add-Result {
 function RunPostRequest {
     param (
         [string]$url,
-        [hashtable]$body,
+        [object]$body,
         [int[]]$expectedStatusCodes = @(200, 201)  # <-- POST defaults to both
     )
 
@@ -49,10 +49,11 @@ function RunPostRequest {
     $sw      = [System.Diagnostics.Stopwatch]::StartNew()
     $response = $null
     $errorBody    = $null
+    $json = ConvertTo-JsonPreserveArrays $body
 
     try {
         $response = Invoke-WebRequest -Uri $fullUrl -Method Post `
-                        -Body ($body | ConvertTo-Json -Depth 10) `
+                        -Body $json `
                         -ContentType "application/json" `
                         -Headers (Get-AuthHeaders) `
                         -SkipHttpErrorCheck  # <-- stay in try on 4xx/5xx
@@ -106,7 +107,7 @@ function RunGetRequest {
 function RunPutRequest {
     param (
         [string]$url,
-        [hashtable]$body,
+        [object]$body,
         [int[]]$expectedStatusCodes = @(200, 201)  
     )
 
@@ -248,5 +249,167 @@ function Format-ErrorBody {
         }
     } catch {
         Write-Host "    Body    : $body" -ForegroundColor Yellow
+    }
+}
+
+function Write-HtmlReport {
+    param (
+        [string]$outputFolder = ".\reports\",
+        [int]$maxReports = 0, #0 = unlimited
+        [int]$maxAgeDays = 0 #0 = unlimited
+    )
+
+    if(-not (Test-Path $outputFolder)) {
+        New-Item -ItemType Directory -Path $outputFolder | Out-Null
+    }
+
+    $getDate = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+    $outputPath = Join-Path -Path $outputFolder -ChildPath "SmokeAlarm_Report_$getDate.html"
+    $results = $script:resultArray
+    $summary = Get-TestSummary
+
+    $passColor = "#4caf50"
+    $failColor = "#f44336"
+
+    $rows = $results | ForEach-Object {
+        $statusColor = if ($_.Passed) { $passColor } else { $failColor }
+        $passText    = if ($_.Passed) { "PASSED" } else { "FAILED" }
+        $body        = if (-not $_.Passed -and $_.Body) {
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($_.Body)
+            "<pre class='error-body'>$escaped</pre>"
+        } else { "" }
+
+        @"
+        <tr>
+            <td><span class="method method-$($_.Method.ToLower())">$($_.Method.ToUpper())</span></td>
+            <td class="path">$($_.Url)</td>
+            <td style="color:$statusColor;font-weight:bold">$passText</td>
+            <td>$($_.StatusCode)</td>
+            <td>$($_.DurationMs) ms</td>
+        </tr>
+        $(if ($body) { "<tr><td colspan='5'>$body</td></tr>" })
+"@
+    }
+
+    $passPercent = if ($summary.Total -gt 0) { 
+    [math]::Round(($summary.Passed / $summary.Total) * 100) 
+    } else { 0 }
+
+    $styleContent = ""
+    $cssPath = Join-Path -Path $PSScriptRoot -ChildPath "reportStyle.css"
+    if (Test-Path $cssPath) {
+        $styleContent = Get-Content -Raw -Path $cssPath
+    } else {
+        Write-Host "Warning: reportStyle.css not found, report will be unstyled" -ForegroundColor Yellow
+    }
+
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SmokeAlarm Report</title>
+    <style>
+    $styleContent
+    </style>
+</head>
+<body>
+    <h1>SmokeAlarm</h1>
+    <div class="subtitle">API Smoke Test Report</div>
+
+    <div class="summary">
+        <div class="card">
+            <div class="card-label">Total</div>
+            <div class="card-value">$($summary.Total)</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Passed</div>
+            <div class="card-value" style="color:$passColor">$($summary.Passed)</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Failed</div>
+            <div class="card-value" style="color:$failColor">$($summary.Failed)</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Total Time</div>
+            <div class="card-value">$([math]::Round($summary.TotalMs)) ms</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Avg Time</div>
+            <div class="card-value">$([math]::Round($summary.AverageMs)) ms</div>
+        </div>
+    </div>
+
+    <div class="progress-bar"><div class="progress-bar-fill" style="width:$passPercent%"></div></div>
+
+
+    <table>
+        <thead>
+            <tr>
+                <th>Method</th>
+                <th>Path</th>
+                <th>Result</th>
+                <th>Status</th>
+                <th>Duration</th>
+            </tr>
+        </thead>
+        <tbody>
+            $($rows -join "`n")
+        </tbody>
+    </table>
+
+    <div class="timestamp">Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+</body>
+</html>
+"@
+
+    $html | Out-File -FilePath $outputPath -Encoding utf8
+    Write-Host "Report saved to $outputPath" -ForegroundColor Cyan
+}
+
+
+# Helper functions
+function ConvertTo-JsonPreserveArrays {
+    param([object]$obj)
+    
+    $cleaned = [ordered]@{}
+    foreach ($key in $obj.Keys) {
+        $val = $obj[$key]
+
+        if ($val -is [array] -or $val -is [System.Collections.Generic.List[object]]) {
+            # Wrap in @() to force array even for single element
+            $cleaned[$key] = @($val)
+        } else {
+            $cleaned[$key] = $val
+        }
+    }
+    return $cleaned | ConvertTo-Json -Depth 10
+}
+
+function Limit-Reports {
+    param (
+        [string]$outputFolder,
+        [int]$maxReports,
+        [int]$maxAgeDays
+    )
+
+    $reports = Get-ChildItem -Path $outputFolder -Filter "SmokeAlarm_Report_*.html" |
+            Sort-Object LastWriteTime -Descending
+
+    # Delete by age
+    if ($maxAgeDays -gt 0) {
+        $cutoff = (Get-Date).AddDays(-$maxAgeDays)
+        $reports | Where-Object { $_.LastWriteTime -lt $cutoff } | ForEach-Object {
+            Remove-Item $_.FullName -Force
+        }
+        $reports = Get-ChildItem -Path $outputFolder -Filter "SmokeAlarm_Report_*.html" |
+                Sort-Object LastWriteTime -Descending
+    }
+
+    # Delete by count
+    if ($maxReports -gt 0 -and $reports.Count -gt $maxReports) {
+        $reports | Select-Object -Skip $maxReports | ForEach-Object {
+            Remove-Item $_.FullName -Force
+        }
     }
 }
