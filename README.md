@@ -19,9 +19,9 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 
 1. **ResolveEndpoints.ps1** reads your `swagger.json` and builds a list of endpoints with auto-generated request bodies based on the schema
 2. **TestFramework.ps1** handles all HTTP calls, timing, and result tracking
-3. **TestRunner.ps1** orchestrates everything — filters, orders, and runs the tests, then prints a summary
-4. **EndpointPriority.ps1** controls execution order — auto-prioritized by path pattern with optional manual overrides
-
+3. **TestRunner.ps1** orchestrates everything —> filters, orders, and runs the tests, then prints a summary
+4. **EndpointPriority.ps1** controls execution order, auto-prioritized by path pattern with optional manual overrides
+5. **AuthFlow.ps1** handles optional login using pipeline secrets
 ---
 
 ## Project Structure
@@ -32,6 +32,8 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 ├── TestFramework.ps1      # HTTP request functions, result tracking, summary
 ├── TestRunner.ps1         # Orchestration, filtering, ordering, output
 ├── EndpointPriority.ps1   # Execution order config
+├── AuthFlow.ps1           # Optional (Auth) login
+├── reportStyle.css        # Style for HTML report
 └── swagger.json           # Your OpenAPI spec
 ```
 
@@ -55,6 +57,9 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
   -accessToken "your_token_here" `
   -methods "get,post,put,delete" `
   -showDetailedErrors $true
+  -saveReports $true
+  -reportLocation = ".\reports\"
+  -maxReports 10
 ```
 
 ### Parameters
@@ -63,11 +68,17 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 |---|---|---|
 | `openApiSpecPath` | `.\swagger.json` | Path to your OpenAPI spec |
 | `baseUrl` | `http://localhost:8080` | Base URL of the API |
-| `accessToken` | `your_token_here` | Bearer token for authentication |
+| `accessToken` | `null` | Bearer token for authentication. Use either this or `username`/`password` |
+| `username` | `null` | Username for authentication. Use either this or `accessToken` |
+| `password` | `null` | Password for authentication. Use either this or `accessToken` |
 | `failOnTestFailures` | `true` | Exit with code 1 if any tests fail |
 | `skipPaths` | `` | Comma-separated path segments to skip (e.g. `auth,admin`) |
 | `methods` | `get,post,put,delete` | Comma-separated HTTP methods to run |
 | `showDetailedErrors` | `false` | Print status code, title, and field errors for failed requests |
+| `reportLocation` | `.\reports\` | Folder path where HTML reports are saved |
+| `saveReports` | `true` | Whether to save HTML reports |
+| `maxReports` | `10` | Maximum number of reports to keep. Oldest are removed first. `0` = unlimited |
+| `maxAgeDays` | `10` | Maximum age of reports in days. `0` = unlimited |
 
 ---
 
@@ -166,8 +177,42 @@ Every run prints a summary:
   Total  : 4823 ms
   Avg    : 200 ms
 ================================
+
+```
+### HTML Reports
+
+By default, SmokeAlarm saves an HTML report for each test run to `.\reports\`. Reports are named by timestamp:
+
+```
+reports/SmokeAlarm_Report_2026-05-30_16-48-07.html
 ```
 
+Reports include a summary card with pass/fail counts and total duration, and a per-request table with method, path, status code, result, and error details for failed requests.
+
+Use `-saveReports $false` to disable report saving entirely.
+
+#### Limiting saved reports
+
+Use `-maxReports` and `-maxAgeDays` to automatically clean up old reports after each run:
+
+```powershell
+.\SmokeAlarm.ps1 -maxReports 10 -maxAgeDays 30
+```
+
+- `-maxReports 10` — keeps the 10 most recent reports, deletes the rest
+- `-maxAgeDays 30` — deletes any report older than 30 days
+- Both can be used together; age cleanup runs first
+- Set either to `0` for unlimited
+
+#### Custom report location
+
+Use `-reportLocation` to save reports to a different folder:
+
+```powershell
+.\SmokeAlarm.ps1 -reportLocation "C:\test-reports\"
+```
+
+The folder will be created automatically if it does not exist.
 ---
 
 ## CI/CD Integration
@@ -180,9 +225,20 @@ see `GitHubActions.yaml` for example
 
 see `AzureDevops.yaml` for example
 
-**Variables to configure:**
-- `API_BASE_URL` — pipeline variable
-- `API_ACCESS_TOKEN` — secret variable
+**Secret variables** (configure in pipeline settings, not in yaml):
+- `API_BASE_URL` — base URL of the API
+- `API_ACCESS_TOKEN` — bearer token, use either this or `API_USERNAME`/`API_PASSWORD`
+- `API_USERNAME` — username for authentication
+- `API_PASSWORD` — password for authentication
+
+**Pipeline variables** (safe to define in yaml):
+- `FAIL_ON_TEST_FAILURES` — exit with code 1 if any tests fail. Default: `true`
+- `SKIP_PATHS` — comma-separated path segments to skip. Default: `'auth,admin'`
+- `METHODS` — quote-wrapped comma-separated HTTP methods to run. Default: `'get','post','put','delete'`
+- `SHOW_DETAILED_ERRORS` — print structured error details for failed requests. Default: `false`
+- `SAVE_REPORTS` — whether to save HTML reports. Default: `true`
+- `MAX_REPORTS` — maximum number of reports to keep. Default: `10`
+- `MAX_AGE_DAYS` — maximum age of reports in days. Default: `10`
 
 ---
 
@@ -194,6 +250,13 @@ see `AzureDevops.yaml` for example
 ---
 
 ## Changelog
+
+### 0.3.0
+- **HTML reports** — test runs can now generate a timestamped HTML report with a summary card and per-request results table (optional)
+- **Report retention** — reports are automatically cleaned up by count (`-maxReports`) or age (`-maxAgeDays`) after each run
+- **Username/password authentication** — `-username` and `-password` can now be used as an alternative to `-accessToken`
+- **Fix: Array request body support** — request body properties typed as arrays are now correctly serialized as JSON arrays instead of scalars
+- **Fix: Response chaining for arrays** — FIX: captured IDs are injected into array-typed request body fields, collecting all matching IDs from the test run
 
 ### 0.2.0
 - **Response chaining** — IDs captured from POST responses are now automatically injected into path parameters, query parameters, and request body arrays of subsequent requests

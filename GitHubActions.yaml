@@ -52,3 +52,7 @@ jobs:
             -skipPaths       $skipPaths `
             -methods         $methods `
             -showDetailedErrors ([System.Convert]::ToBoolean("${{ inputs.show_detailed_errors || 'false' }}"))
+            -saveReports      $true `
+            -reportLocation   "${{ github.workspace }}\TestReports" `
+            -maxReports       10 `
+            -maxAgeDays       10

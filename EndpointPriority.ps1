@@ -2,6 +2,11 @@
 $script:priorityOverrides = @{
     '/api/Auth/register' = 1
     '/api/Auth/login'    = 2
+    '/api/Competition/create' = 3
+    '/api/CompetitionRound/create' = 4
+    '/api/CompetitionRoundStage/create' = 5
+    '/api/Schedule/create' = 6
+    '/api/Player/create' = 7
 }
 
 function Get-EndpointPriority {
