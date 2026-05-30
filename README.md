@@ -7,6 +7,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 - Simple to use, just put it in your pipeline, point it towards your api and spec and run it.
 - Filterable (http methods, paths) and configurable (detailed errors, fail pipeline on error)
 - Automatically chains requests — captures IDs from responses and reuses them in subsequent calls
+- Generates easy-to-read HTML Reports that facilitates simpler bug hunting
 
 ### Limitations
 
@@ -196,11 +197,11 @@ Use `-saveReports $false` to disable report saving entirely.
 Use `-maxReports` and `-maxAgeDays` to automatically clean up old reports after each run:
 
 ```powershell
-.\SmokeAlarm.ps1 -maxReports 10 -maxAgeDays 30
+.\SmokeAlarm.ps1 -maxReports 10 -maxAgeDays 10
 ```
 
 - `-maxReports 10` — keeps the 10 most recent reports, deletes the rest
-- `-maxAgeDays 30` — deletes any report older than 30 days
+- `-maxAgeDays 10` — deletes any report older than 10 days
 - Both can be used together; age cleanup runs first
 - Set either to `0` for unlimited
 
@@ -246,6 +247,7 @@ see `AzureDevops.yaml` for example
 
 - **More auth types** — adding more options beyond Bearer token
 - **Configurable default values** — letting the user enter default values to match when validation is in the way
+- **Validation hunting** - finding active validation in API and adjusting request bodies automatically
 
 ---
 
