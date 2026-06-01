@@ -86,7 +86,6 @@ function RunGetRequest {
     try {
         $response = Invoke-WebRequest -Uri $fullUrl -Method Get `
                         -Headers (Get-AuthHeaders) `
-                        -ErrorAction Stop
                         -SkipHttpErrorCheck 
 
         $errorBody = if ($response.Content -is [byte[]]) {

@@ -194,15 +194,11 @@ function Get-EndpointDependencies {
         $schemas
     )
 
-    # Step 1: Build a map of what each POST endpoint produces
-    # e.g. POST /api/Player/create -> produces "playerId"
     $producers = @{}
 
     foreach ($ep in $endpoints) {
         if ($ep.Method -ne 'post') { continue }
 
-        # Derive the resource name from the path
-        # e.g. /api/Player/create -> "player"
         $segments = $ep.Path.Split('/') | Where-Object { $_ -and $_ -notmatch '^api$' }
         if ($segments.Count -gt 0) {
             $resource = $segments[0].ToLower()
@@ -210,14 +206,13 @@ function Get-EndpointDependencies {
         }
     }
 
-    # Step 2: For each endpoint, check if it consumes anything a producer makes
     $dependencies = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new()
 
     foreach ($ep in $endpoints) {
         $key  = "$($ep.Method):$($ep.Path)"
         $deps = [System.Collections.Generic.List[string]]::new()
 
-        # Check path parameters: /api/Schedule/{scheduleId} -> depends on "schedule"
+        # Check path parameters
         $paramMatches = [regex]::Matches($ep.Path, '\{(\w+)\}')
         foreach ($match in $paramMatches) {
             $paramName = $match.Groups[1].Value.ToLower()
@@ -247,6 +242,26 @@ function Get-EndpointDependencies {
             }
         }
 
+        # Action endpoints depend on their base resource creator
+        $segments       = $ep.Path.Trim('/') -split '/'
+        $resourceSegment = $segments | Where-Object { 
+            $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' 
+        } | Select-Object -First 1
+
+        $actionSegment = $segments | Where-Object { $_ -match '-' } | Select-Object -First 1
+
+        if ($actionSegment -and $resourceSegment) {
+            $creatorEp = $endpoints | Where-Object { 
+                $_.Method -eq 'post' -and 
+                $_.Path -match "/$resourceSegment/" -and 
+                $_.Path -match 'create$'
+            } | Select-Object -First 1
+
+            if ($creatorEp -and -not $deps.Contains($creatorEp.Path)) {
+                $null = $deps.Add($creatorEp.Path)
+            }
+        }
+
         $dependencies[$key] = $deps
     }
 
@@ -269,7 +284,6 @@ function Get-SortedEndpoints {
         if ($visited.Contains($key)) { return }
         $null = $visited.Add($key)
 
-        # Visit dependencies first
         if ($dependencies.ContainsKey($key)) {
             foreach ($depPath in $dependencies[$key]) {
                 $depEp = $endpoints | Where-Object { $_.Path -eq $depPath -and $_.Method -eq 'post' } | Select-Object -First 1
@@ -280,13 +294,44 @@ function Get-SortedEndpoints {
         $null = $sorted.Add($ep)
     }
 
+    # Manual priorities first
     $manualEps = $endpoints | Where-Object {
         (Get-EndpointPriority -path $_.Path -method $_.Method) -ne 999
     } | Sort-Object { Get-EndpointPriority -path $_.Path -method $_.Method }
 
     foreach ($ep in $manualEps) { Visit-Endpoint $ep }
 
-    foreach ($ep in $endpoints) { Visit-Endpoint $ep }
+    # Non-delete endpoints in dependency order
+    foreach ($ep in ($endpoints | Where-Object { $_.Method -ne 'delete' })) { 
+        Visit-Endpoint $ep 
+    }
+
+    # Delete endpoints — reverse of their corresponding POST order
+    $postPaths   = $endpoints | Where-Object { $_.Method -eq 'post' } | ForEach-Object { $_.Path }
+    $deleteEps   = $endpoints | Where-Object { $_.Method -eq 'delete' }
+
+    # Match each delete to its corresponding post path and sort in reverse
+    $orderedDeletes = $postPaths | ForEach-Object {
+        $postPath = $_
+        # Find a delete endpoint whose path shares the same resource segment
+        $deleteEps | Where-Object {
+            $delSegments  = $_.Path.Trim('/') -split '/'
+                $postSegments = $postPath.Trim('/') -split '/'
+            $delResource  = $delSegments | Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|delete|update' } | Select-Object -First 1
+            $postResource = $postSegments | Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|delete|update' } | Select-Object -First 1
+            $delResource -eq $postResource
+        } | Select-Object -First 1
+    } | Where-Object { $_ } | Sort-Object { $postPaths.IndexOf($_.Path) } -Descending
+
+    # Add any deletes that didn't match a post last
+    $unmatchedDeletes = $deleteEps | Where-Object { 
+        $ep = $_
+        -not ($orderedDeletes | Where-Object { $_.Path -eq $ep.Path })
+    }
+
+    foreach ($ep in ($orderedDeletes + $unmatchedDeletes)) { 
+        Visit-Endpoint $ep 
+    }
 
     return $sorted.ToArray()
 }

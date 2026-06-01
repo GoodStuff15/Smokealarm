@@ -22,69 +22,118 @@ param(
     )
 
     $global:capturedIds = @{}
+    $script:creationOrder = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 function Get-CapturedId {
     param ([string]$paramName, [string]$path)
 
     $keyword = $paramName -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
 
-    # If keyword is empty (param is just "id"), derive resource from path
     if ([string]::IsNullOrWhiteSpace($keyword)) {
         $segments = $path.Trim('/') -split '/'
-        $keyword  = $segments | Where-Object { 
-            $_ -notmatch 'api|^\{' -and $_ -notmatch '^\d+$'
-        } | Select-Object -Last 1
-        $keyword = $keyword.ToLower()
+        
+        # Try each segment, including hyphenated ones, for a captured ID match
+        $keyword = $null
+        foreach ($segment in ($segments | Where-Object { $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list|change|set|remove|activate|deactivate'} | Select-Object -Last 3)) {
+            # Split hyphenated segments and check each part
+            $parts = $segment -split '-'
+            foreach ($part in $parts) {
+                $part = $part -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
+                if ($part.Length -gt 2 -and $global:capturedIds.Keys -like "*$part*") {
+                    $keyword = $part
+                    break
+                }
+            }
+            if ($keyword) { break }
+        }
+    }
+    Write-Host "DEBUG GetCapturedId: paramName='$paramName' keyword='$keyword'" -ForegroundColor Gray
+
+    if ($keyword) {
+        $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+        if (-not $match) {
+            $match = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+        }
+                if ($match) {
+            return [string]$global:capturedIds[$match]
+        }
     }
 
-    $match = $global:capturedIds.Keys | 
-                Where-Object { $_ -like "*$keyword*" } | 
-                Select-Object -First 1
-
-    if ($match) {
-        return [string]$global:capturedIds[$match]
-    }
-
-    Write-Host "  WARNING: No captured ID found for '$paramName' in '$path', using 2" -ForegroundColor DarkYellow
-    return '2'
+    Write-Host "  WARNING: No captured ID found for '$paramName' in '$path', using 1" -ForegroundColor DarkYellow
+    return '1'
 }
 
 function Save-ResponseId {
-    param ([string]$path, [string]$body)
+    param (
+        [string]$path, 
+        [string]$body,
+        [bool]$overwrite = $false
+    )
 
     if ([string]::IsNullOrWhiteSpace($body)) { return }
 
     try {
         $parsed = $body | ConvertFrom-Json
-
-        $idProp = $parsed.PSObject.Properties | Where-Object { $_.Name -eq 'id' -or $_.Name -eq 'Id' } | 
-                    Select-Object -First 1
-
-        if (-not $idProp) {
-            $idProp = $parsed.PSObject.Properties | 
-                        Where-Object { $_.Name -match '[Ii]d$' } | 
-                        Select-Object -First 1
-        }
-
-        if (-not $idProp) { 
-            return 
-        }
-
-        $id  = $idProp.Value
-        $key = if ($idProp.Name -eq 'id' -or $idProp.Name -eq 'Id') {
-            $segments = $path.Trim('/') -split '/'
-            $derived = $segments | Where-Object { $_ -notmatch 'api|create|add|update|delete' } | 
-                Select-Object -First 1
-            $derived.ToLower()
-        } else {
-            ($idProp.Name -replace '[Ii]d$', '').ToLower()
-        }
-
-        if ($id -and $key) {
-            $global:capturedIds[$key] = $id
-        }
+        Get-IdsFromObject -obj $parsed -path $path -overwrite $overwrite
     } catch {
+        Write-Host "  WARNING: Could not parse response body for ID extraction" -ForegroundColor DarkYellow
+    }
+}
 
+function Get-IdsFromObject {
+    param (
+        [object]$obj,
+        [string]$path,
+        [int]$depth = 0,
+        [bool]$overwrite = $false
+    )
+
+    if ($depth -gt 10 -or $null -eq $obj) { return }
+
+    if ($obj -is [System.Object[]]) {
+        foreach ($item in $obj) {
+            Get-IdsFromObject -obj $item -path $path -depth ($depth + 1) -overwrite $overwrite
+        }
+        return
+    }
+
+    if ($obj.PSObject.Properties) {
+        foreach ($prop in $obj.PSObject.Properties) {
+            $name  = $prop.Name
+            $value = $prop.Value
+
+            if ($null -eq $value) { continue }
+
+            if (($name -eq 'id' -or $name -eq 'Id' -or $name -match '[Ii]d$') -and 
+                ($value -is [int] -or $value -is [long])) {
+
+                # Skip plain 'id' fields in nested objects — they belong to a different resource
+                if (($name -eq 'id' -or $name -eq 'Id') -and $depth -gt 0) { continue }
+
+                    $key = if ($name -eq 'id' -or $name -eq 'Id') {
+                    $segments = $path.Trim('/') -split '/'
+                    $raw = $segments | Where-Object { 
+                        $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list'
+                    } | Select-Object -Last 1 | ForEach-Object { $_.ToLower() }
+                    # Singularize — strip trailing 's' if result still matches a known segment
+                    if ($raw -match 's$') { $raw -replace 's$', '' } else { $raw }
+                } else {
+                    ($name -replace '[Ii]ds$', '' -replace '[Ii]d$', '').ToLower()
+                }
+
+                if ($key -and $value) {
+                    if ($overwrite -or -not $global:capturedIds.ContainsKey($key)) {
+                        $global:capturedIds[$key] = $value
+                        Write-Host "  CAPTURED: $key = $value (from '$name' depth=$depth)" -ForegroundColor DarkCyan
+                    }
+                }
+            }
+
+            if ($value -is [System.Management.Automation.PSCustomObject] -or 
+                $value -is [System.Object[]]) {
+                Get-IdsFromObject -obj $value -path $path -depth ($depth + 1) -overwrite $overwrite
+            }
+        }
     }
 }
 
@@ -125,7 +174,10 @@ function Resolve-RequestBody {
 
         } elseif ($value -is [int] -or $value -is [long]) {
             $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-            $match    = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+            $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+            if (-not $match) {
+                $match = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+            }
             $obj[$key] = if ($match) { [int]$global:capturedIds[$match] } else { $value }
 
         } else {
@@ -171,34 +223,34 @@ $endpoints = $endpoints | Where-Object {
 # 3. Run tests
 # =====================
 
-foreach ($endpoint in $endpoints) {
+$deleteEndpoints = [System.Collections.Generic.List[object]]::new()
 
+# Pass 1 — run everything except deletes
+foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
 
     $method       = $endpoint.Method
     $resolvedPath = (Resolve-PathParameters -path $endpoint.Path) + 
-                (Resolve-QueryParameters -parameters $endpoint.Parameters)
+                    (Resolve-QueryParameters -parameters $endpoint.Parameters)
     $resolvedBody = if ($method -eq 'post' -or $method -eq 'put') {
         Resolve-RequestBody -body $endpoint.RequestBody
-    } else {
-        $null
-    }
+    } else { $null }
 
     Write-Host "  -> $($method.ToUpper()) $resolvedPath" -NoNewline
 
     $passed = switch ($method) {
-        'post'   { RunPostRequest   -url $resolvedPath -body $resolvedBody }
-        'get'    { RunGetRequest    -url $resolvedPath }
-        'put'    { RunPutRequest    -url $resolvedPath -body $resolvedBody }
-        'delete' { RunDeleteRequest -url $resolvedPath }
+        'post' { RunPostRequest -url $resolvedPath -body $resolvedBody }
+        'get'  { RunGetRequest  -url $resolvedPath }
+        'put'  { RunPutRequest  -url $resolvedPath -body $resolvedBody }
     }
 
     if ($passed) {
-        
         Write-Host "  PASSED" -ForegroundColor Green
-        if ($method -eq 'post') {   # <-- was $group.Name
+        if ($method -eq 'post') {
             $last = $script:resultArray | Select-Object -Last 1
+            Save-ResponseId -path $endpoint.Path -body $last.Body -overwrite $true
 
-            Save-ResponseId -path $endpoint.Path -body $last.Body
+            # Track creation order for reverse delete
+            $null = $script:creationOrder.Add($endpoint)
         }
     } else {
         Write-Host "  FAILED" -ForegroundColor Red
@@ -209,6 +261,55 @@ foreach ($endpoint in $endpoints) {
     }
 }
 
+# Pass 2 — run deletes in reverse creation order
+$allDeletes = $endpoints | Where-Object { $_.Method -eq 'delete' }
+
+# Sort deletes by matching them to creation order, reversed
+$orderedDeletes = [System.Collections.Generic.List[object]]::new()
+
+# First add deletes that match a created resource, in reverse order
+for ($i = $script:creationOrder.Count - 1; $i -ge 0; $i--) {
+    $created = $script:creationOrder[$i]
+    $postSegment = $created.Path.Trim('/') -split '/' | 
+                   Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|update|delete' } | 
+                   Select-Object -First 1
+
+    $match = $allDeletes | Where-Object {
+        $delSegment = $_.Path.Trim('/') -split '/' | 
+                      Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|update|delete' } | 
+                      Select-Object -First 1
+        $delSegment -eq $postSegment
+    } | Select-Object -First 1
+
+    if ($match -and -not ($orderedDeletes | Where-Object { $_.Path -eq $match.Path })) {
+        $null = $orderedDeletes.Add($match)
+    }
+}
+
+# Then add any unmatched deletes at the end
+foreach ($ep in $allDeletes) {
+    if (-not ($orderedDeletes | Where-Object { $_.Path -eq $ep.Path })) {
+        $null = $orderedDeletes.Add($ep)
+    }
+}
+
+foreach ($endpoint in $orderedDeletes) {
+    $resolvedPath = Resolve-PathParameters -path $endpoint.Path
+
+    Write-Host "  -> DELETE $resolvedPath" -NoNewline
+
+    $passed = RunDeleteRequest -url $resolvedPath
+
+    if ($passed) {
+        Write-Host "  PASSED" -ForegroundColor Green
+    } else {
+        Write-Host "  FAILED" -ForegroundColor Red
+        if ($showDetailedErrors) {
+            $last = $script:resultArray | Select-Object -Last 1
+            Format-ErrorBody -body $last.Body -statusCode $last.StatusCode
+        }
+    }
+}
 
 
 # =====================
