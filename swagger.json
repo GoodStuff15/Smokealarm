@@ -1696,7 +1696,7 @@
       }
     },
     "/api/Player/remove-player/{playerId}/competition/{competitionId}": {
-      "delete": {
+      "put": {
         "tags": [
           "Player"
         ],
@@ -2740,7 +2740,7 @@
       }
     },
     "/api/Team/{teamId}/remove-member/{playerId}": {
-      "delete": {
+      "put": {
         "tags": [
           "Team"
         ],
