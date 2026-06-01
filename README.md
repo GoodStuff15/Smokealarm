@@ -1,6 +1,9 @@
 # SmokeAlarm 
 ## PowerShell API Test Framework
 
+### Current version: 0.3.2
+#### Last updated: 2026-06-01
+
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
 ### Advantages
@@ -255,6 +258,10 @@ see `AzureDevops.yaml` for example
 
 ## Changelog
 
+### 0.3.2
+- **Improved auto dependency ordering** - Added filtering of "other" POST endpoint to depend on create being called first. Deletes are now run in reverse order of creates.
+- **Improved response chaining** - Now finds entity ids in nested response DTOs and uses them in calls where applicable. Also smoothed out some edge cases (matching words ending with "s" etc.) 
+- 
 ### 0.3.1
 - **Auto dependency ordering** — endpoints are now automatically sorted so POST producers run before the endpoints that consume their produced IDs. Manual overrides in `EndpointPriority.ps1` still take precedence
 
