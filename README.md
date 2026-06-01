@@ -137,6 +137,8 @@ Endpoints are automatically ordered based on path patterns and HTTP method so th
 
 Within each group, methods run in order: `POST → GET → PUT → DELETE`.
 
+Tests are further ordered by comparing response values from POST requests to upcoming api paths/request values.
+
 ### Manual Priority Overrides
 
 For endpoints with explicit dependencies, set exact priorities in `EndpointPriority.ps1`:
@@ -252,6 +254,9 @@ see `AzureDevops.yaml` for example
 ---
 
 ## Changelog
+
+### 0.3.1
+- **Auto dependency ordering** — endpoints are now automatically sorted so POST producers run before the endpoints that consume their produced IDs. Manual overrides in `EndpointPriority.ps1` still take precedence
 
 ### 0.3.0
 - **HTML reports** — test runs can now generate a timestamped HTML report with a summary card and per-request results table (optional)
