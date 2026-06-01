@@ -20,7 +20,7 @@ function Get-ApiEndpoints {
     $requestArray = [System.Collections.Generic.List[PSObject]]::new()
 
     $pathArray | ForEach-Object {
-        $requestBody = $null  # <-- reset each iteration!
+        $requestBody = $null
 
         if ($_.Detail.requestBody) {
             $refString = $_.Detail.requestBody.content."application/json".schema.'$ref'
@@ -34,11 +34,14 @@ function Get-ApiEndpoints {
             Path        = $_.Path
             Method      = $_.Method
             RequestBody = $requestBody
-            Parameters = $_.Detail.parameters
+            Parameters  = $_.Detail.parameters
         })
     }
 
-    return $requestArray
+    return [PSCustomObject]@{
+        Endpoints = $requestArray
+        Schemas   = $schemas
+    }
 }
 
 
@@ -183,4 +186,107 @@ function Resolve-PathParameters {
         $paramName = $match.Groups[1].Value  # just the name, no braces
         return Get-CapturedId -paramName $paramName -path $path
     })
+}
+
+function Get-EndpointDependencies {
+    param (
+        [array]$endpoints,
+        $schemas
+    )
+
+    # Step 1: Build a map of what each POST endpoint produces
+    # e.g. POST /api/Player/create -> produces "playerId"
+    $producers = @{}
+
+    foreach ($ep in $endpoints) {
+        if ($ep.Method -ne 'post') { continue }
+
+        # Derive the resource name from the path
+        # e.g. /api/Player/create -> "player"
+        $segments = $ep.Path.Split('/') | Where-Object { $_ -and $_ -notmatch '^api$' }
+        if ($segments.Count -gt 0) {
+            $resource = $segments[0].ToLower()
+            $producers[$resource] = $ep.Path
+        }
+    }
+
+    # Step 2: For each endpoint, check if it consumes anything a producer makes
+    $dependencies = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new()
+
+    foreach ($ep in $endpoints) {
+        $key  = "$($ep.Method):$($ep.Path)"
+        $deps = [System.Collections.Generic.List[string]]::new()
+
+        # Check path parameters: /api/Schedule/{scheduleId} -> depends on "schedule"
+        $paramMatches = [regex]::Matches($ep.Path, '\{(\w+)\}')
+        foreach ($match in $paramMatches) {
+            $paramName = $match.Groups[1].Value.ToLower()
+            foreach ($resource in $producers.Keys) {
+                if ($paramName -like "*$resource*") {
+                    $null = $deps.Add($producers[$resource])
+                }
+            }
+        }
+
+        # Check request body fields
+        if ($ep.Detail.requestBody) {
+            $refString = $ep.Detail.requestBody.content."application/json".schema.'$ref'
+            if ($refString) {
+                $dtoName = extractDtoName -refString $refString
+                $schema  = $schemas.PSObject.Properties[$dtoName].Value
+                if ($schema -and $schema.properties) {
+                    foreach ($prop in $schema.properties.PSObject.Properties) {
+                        $propName = $prop.Name.ToLower()
+                        foreach ($resource in $producers.Keys) {
+                            if ($propName -like "*$resource*" -and $propName -like "*id*") {
+                                $null = $deps.Add($producers[$resource])
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $dependencies[$key] = $deps
+    }
+
+    return $dependencies
+}
+
+function Get-SortedEndpoints {
+    param (
+        [array]$endpoints,
+        $schemas
+    )
+
+    $dependencies = Get-EndpointDependencies -endpoints $endpoints -schemas $schemas
+    $sorted       = [System.Collections.Generic.List[object]]::new()
+    $visited      = [System.Collections.Generic.HashSet[string]]::new()
+
+    function Visit-Endpoint {
+        param ($ep)
+        $key = "$($ep.Method):$($ep.Path)"
+        if ($visited.Contains($key)) { return }
+        $null = $visited.Add($key)
+
+        # Visit dependencies first
+        if ($dependencies.ContainsKey($key)) {
+            foreach ($depPath in $dependencies[$key]) {
+                $depEp = $endpoints | Where-Object { $_.Path -eq $depPath -and $_.Method -eq 'post' } | Select-Object -First 1
+                if ($depEp) { Visit-Endpoint $depEp }
+            }
+        }
+
+        $null = $sorted.Add($ep)
+    }
+
+    $manualEps = $endpoints | Where-Object {
+        (Get-EndpointPriority -path $_.Path -method $_.Method) -ne 999
+    } | Sort-Object { Get-EndpointPriority -path $_.Path -method $_.Method }
+
+    foreach ($ep in $manualEps) { Visit-Endpoint $ep }
+
+    foreach ($ep in $endpoints) { Visit-Endpoint $ep }
+
+    return $sorted.ToArray()
 }

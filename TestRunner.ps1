@@ -12,7 +12,7 @@ param(
     # Customization options
     [string]$reportLocation = ".\reports\",  # optional path to save HTML report (e.g. ".\reports\")
     [bool]$failOnTestFailures = $true,
-    [string[]]$skipPaths      = @(),
+    [string[]]$skipPaths      = @('team-participants'),
     [string[]]$methods        = @('get','post', 'put', 'delete'),
     [bool]$showDetailedErrors = $true,
     [bool]$saveReports = $true,
@@ -26,18 +26,27 @@ param(
 function Get-CapturedId {
     param ([string]$paramName, [string]$path)
 
-    # Strip the param name down to the resource keyword (e.g. "userId" -> "user") for better matching with captured IDs
-    $keyword = $paramName -replace 'id$', '' -replace 'Id$', ''
+    $keyword = $paramName -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
 
-    # Look for a captured ID whose key contains the keyword
+    # If keyword is empty (param is just "id"), derive resource from path
+    if ([string]::IsNullOrWhiteSpace($keyword)) {
+        $segments = $path.Trim('/') -split '/'
+        $keyword  = $segments | Where-Object { 
+            $_ -notmatch 'api|^\{' -and $_ -notmatch '^\d+$'
+        } | Select-Object -Last 1
+        $keyword = $keyword.ToLower()
+    }
+
     $match = $global:capturedIds.Keys | 
                 Where-Object { $_ -like "*$keyword*" } | 
                 Select-Object -First 1
+
     if ($match) {
         return [string]$global:capturedIds[$match]
     }
 
-    return '1'
+    Write-Host "  WARNING: No captured ID found for '$paramName' in '$path', using 2" -ForegroundColor DarkYellow
+    return '2'
 }
 
 function Save-ResponseId {
@@ -81,6 +90,7 @@ function Save-ResponseId {
 
 function Resolve-RequestBody {
     param ([object]$body)
+    Write-Host "DEBUG capturedIds: $($global:capturedIds | ConvertTo-Json)" -ForegroundColor Magenta
 
     if (-not $body) { return $body }
 
@@ -114,7 +124,7 @@ function Resolve-RequestBody {
             $obj[$key] = [object[]]@($arr)  # force object array, not int array
 
         } elseif ($value -is [int] -or $value -is [long]) {
-            $keyword  = $key -replace '[Ii]d$', ''
+            $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
             $match    = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
             $obj[$key] = if ($match) { [int]$global:capturedIds[$match] } else { $value }
 
@@ -140,18 +150,16 @@ if ($username -and $password) {
 # =====================
 # 2. Load endpoints
 # =====================
-$endpoints = Get-ApiEndpoints -openApiSpecPath $openApiSpecPath | Sort-Object {
-    Get-EndpointPriority -path $_.Path -method $_.Method
-}
+$apiData  = Get-ApiEndpoints -openApiSpecPath $openApiSpecPath
+
+$endpoints = Get-SortedEndpoints -endpoints $apiData.Endpoints -schemas $apiData.Schemas
 
 $endpoints = $endpoints | Where-Object {
     $path   = $_.Path
     $method = $_.Method
 
-    # Filter by method
     if ($method -notin $methods) { return $false }
 
-    # Skip paths containing any of the skip strings
     foreach ($skip in $skipPaths) {
         if ($skip -and $path -like "*$skip*") { return $false }
     }

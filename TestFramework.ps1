@@ -121,7 +121,6 @@ function RunPutRequest {
                         -Body ($body | ConvertTo-Json -Depth 10) `
                         -ContentType "application/json" `
                         -Headers (Get-AuthHeaders) `
-                        -ErrorAction Stop
                         -SkipHttpErrorCheck 
         $errorBody = if ($response.Content -is [byte[]]) {
                             [System.Text.Encoding]::UTF8.GetString($response.Content)
@@ -152,7 +151,6 @@ function RunDeleteRequest {
     try {
         $response = Invoke-WebRequest -Uri $fullUrl -Method Delete `
                         -Headers (Get-AuthHeaders) `
-                        -ErrorAction Stop
                         -SkipHttpErrorCheck 
         $errorBody = if ($response.Content -is [byte[]]) {
                             [System.Text.Encoding]::UTF8.GetString($response.Content)
@@ -365,6 +363,9 @@ function Write-HtmlReport {
 
     $html | Out-File -FilePath $outputPath -Encoding utf8
     Write-Host "Report saved to $outputPath" -ForegroundColor Cyan
+
+    Limit-Reports -outputFolder $outputFolder -maxReports $maxReports -maxAgeDays $maxAgeDays
+
 }
 
 
