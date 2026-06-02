@@ -31,18 +31,31 @@ function Get-CapturedId {
     # If keyword is empty (param is just "id"), derive resource from path
     if ([string]::IsNullOrWhiteSpace($keyword)) {
         $segments = $path.Trim('/') -split '/'
-        $keyword  = $segments | Where-Object { 
-            $_ -notmatch 'api|^\{' -and $_ -notmatch '^\d+$'
-        } | Select-Object -Last 1
-        $keyword = $keyword.ToLower()
+        
+        # Try each segment, including hyphenated ones, for a captured ID match
+        $keyword = $null
+        foreach ($segment in ($segments | Where-Object { $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list|change|set|remove|activate|deactivate'} | Select-Object -Last 3)) {
+            # Split hyphenated segments and check each part
+            $parts = $segment -split '-'
+            foreach ($part in $parts) {
+                $part = $part -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
+                if ($part.Length -gt 2 -and $global:capturedIds.Keys -like "*$part*") {
+                    $keyword = $part
+                    break
+                }
+            }
+            if ($keyword) { break }
+        }
     }
 
-    $match = $global:capturedIds.Keys | 
-                Where-Object { $_ -like "*$keyword*" } | 
-                Select-Object -First 1
-
-    if ($match) {
-        return [string]$global:capturedIds[$match]
+    if ($keyword) {
+        $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+        if (-not $match) {
+            $match = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+        }
+                if ($match) {
+            return [string]$global:capturedIds[$match]
+        }
     }
 
     Write-Host "  WARNING: No captured ID found for '$paramName' in '$path', using 2" -ForegroundColor DarkYellow
@@ -90,8 +103,7 @@ function Save-ResponseId {
 
 function Resolve-RequestBody {
     param ([object]$body)
-    Write-Host "DEBUG capturedIds: $($global:capturedIds | ConvertTo-Json)" -ForegroundColor Magenta
-
+    
     if (-not $body) { return $body }
 
     $obj = [ordered]@{}  # <-- hashtable instead of PSCustomObject
