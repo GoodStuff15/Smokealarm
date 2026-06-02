@@ -139,8 +139,7 @@ function Get-IdsFromObject {
 
 function Resolve-RequestBody {
     param ([object]$body)
-    Write-Host "DEBUG capturedIds: $($global:capturedIds | ConvertTo-Json)" -ForegroundColor Magenta
-
+    
     if (-not $body) { return $body }
 
     $obj = [ordered]@{}  # <-- hashtable instead of PSCustomObject
