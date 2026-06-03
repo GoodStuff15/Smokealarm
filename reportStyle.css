@@ -132,3 +132,54 @@ pre.error-body {
     text-align: right; 
     margin-top: 32px; 
 }
+
+.warnings {
+    margin: 20px 0;
+    border-left: 4px solid #ff9800;
+    background: #fff8e1;
+    border-radius: 4px;
+}
+
+.warnings-title {
+    font-weight: bold;
+    color: #ff9800;
+    font-size: 1.1em;
+    padding: 16px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.warnings-title::-webkit-details-marker {
+    display: none;
+}
+
+.warnings-title::before {
+    content: '▶ ';
+    font-size: 0.8em;
+}
+
+details[open] .warnings-title::before {
+    content: '▼ ';
+}
+
+.warnings-body {
+    padding: 0 16px 16px 16px;
+}
+
+.warning-group {
+    margin-bottom: 12px;
+}
+
+.warning-group-title {
+    font-weight: bold;
+    color: #e65100;
+    margin-bottom: 4px;
+    font-size: 0.95em;
+}
+
+.warning-item {
+    color: #555;
+    padding: 2px 0 2px 12px;
+    font-size: 0.9em;
+}

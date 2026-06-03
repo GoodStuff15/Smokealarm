@@ -83,6 +83,7 @@ function RunGetRequest {
     $response = $null
     $errorBody = $null
 
+
     try {
         $response = Invoke-WebRequest -Uri $fullUrl -Method Get `
                         -Headers (Get-AuthHeaders) `
@@ -188,14 +189,29 @@ function Get-TestSummary {
 
 function Write-TestSummary {
     $s = Get-TestSummary
-    Write-Host "================================"
+    Write-Host "================================" -ForegroundColor Cyan
     Write-Host "  Total  : $($s.Total)"
     Write-Host "  Passed : $($s.Passed)" -ForegroundColor Green
     Write-Host "  Failed : $($s.Failed)" -ForegroundColor Red
     Write-Host "  Total  : $([math]::Round($s.TotalMs)) ms"
     Write-Host "  Avg    : $([math]::Round($s.AverageMs)) ms"
-    Write-Host "================================"
+    Write-Host "================================" -ForegroundColor Cyan
+
+        if ($script:warnings.Count -gt 0) {
+        Write-Host "================================" -ForegroundColor Cyan
+        Write-Host "  WARNINGS ($($script:warnings.Count)):" -ForegroundColor Yellow
+
+        $script:warnings | Group-Object -Property Type | ForEach-Object {
+            Write-Host "  $($_.Name) ($($_.Count)):" -ForegroundColor Yellow
+            foreach ($w in $_.Group) {
+                Write-Host "    ! $($w.Message)" -ForegroundColor Yellow
+            }
+        }
+        Write-Host "=================================" -ForegroundColor Cyan
+    }
 }
+
+
 
 function Format-ErrorBody {
     param (
@@ -300,6 +316,32 @@ function Write-HtmlReport {
         Write-Host "Warning: reportStyle.css not found, report will be unstyled" -ForegroundColor Yellow
     }
 
+    if ($script:warnings.Count -gt 0) {
+    $groupedWarnings = $script:warnings | Group-Object -Property Type
+
+    $warningGroups = $groupedWarnings | ForEach-Object {
+        $typeTitle = $_.Name
+        $items     = $_.Group | ForEach-Object {
+            "<div class='warning-item'>&#9888; $($_.Message)</div>"
+        }
+        @"
+        <div class="warning-group">
+            <div class="warning-group-title">$typeTitle ($($_.Count))</div>
+            $($items -join "`n")
+        </div>
+"@
+    }
+
+    $warningsHtml = @"
+    <details class="warnings">
+        <summary class="warnings-title">&#9888; Test Execution Warnings ($($script:warnings.Count))</summary>
+        <div class="warnings-body">
+            $($warningGroups -join "`n")
+        </div>
+    </details>
+"@
+    }   
+
     $html = @"
 <!DOCTYPE html>
 <html lang="en">
@@ -339,6 +381,7 @@ function Write-HtmlReport {
 
     <div class="progress-bar"><div class="progress-bar-fill" style="width:$passPercent%"></div></div>
 
+     $warningsHtml
 
     <table>
         <thead>
