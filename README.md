@@ -1,8 +1,8 @@
 # SmokeAlarm 
 ## PowerShell API Test Framework
 
-### Current version: 0.3.2
-#### Last updated: 2026-06-01
+### Current version: 0.4.0
+#### Last updated: 2026-06-03
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
@@ -26,6 +26,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 3. **TestRunner.ps1** orchestrates everything —> filters, orders, and runs the tests, then prints a summary
 4. **EndpointPriority.ps1** controls execution order, auto-prioritized by path pattern with optional manual overrides
 5. **AuthFlow.ps1** handles optional login using pipeline secrets
+6. **EndpointWarnings.ps1** looks trough endpoint calls for possible issues with test framework and collects them for presentation
 ---
 
 ## Project Structure
@@ -37,6 +38,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 ├── TestRunner.ps1         # Orchestration, filtering, ordering, output
 ├── EndpointPriority.ps1   # Execution order config
 ├── AuthFlow.ps1           # Optional (Auth) login
+├── EndpointWarnings.ps1   # Test execution warnings
 ├── reportStyle.css        # Style for HTML report
 └── swagger.json           # Your OpenAPI spec
 ```
@@ -59,11 +61,15 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
   -openApiSpecPath ".\swagger.json" `
   -baseUrl "http://localhost:your-port-number" `
   -accessToken "your_token_here" `
+  -username "your_api_username_here" `
+  -password "your_api_password_here" `
   -methods "get,post,put,delete" `
   -showDetailedErrors $true
   -saveReports $true
   -reportLocation = ".\reports\"
   -maxReports 10
+  -maxAgeDays 10,
+  -
 ```
 
 ### Parameters
@@ -78,9 +84,9 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 | `failOnTestFailures` | `true` | Exit with code 1 if any tests fail |
 | `skipPaths` | `` | Comma-separated path segments to skip (e.g. `auth,admin`) |
 | `methods` | `get,post,put,delete` | Comma-separated HTTP methods to run |
-| `showDetailedErrors` | `false` | Print status code, title, and field errors for failed requests |
-| `reportLocation` | `.\reports\` | Folder path where HTML reports are saved |
+| `showDetailedErrors` | `true` | Print status code, title, and field errors for failed requests |
 | `saveReports` | `true` | Whether to save HTML reports |
+| `reportLocation` | `.\reports\` | Folder path where HTML reports are saved |
 | `maxReports` | `10` | Maximum number of reports to keep. Oldest are removed first. `0` = unlimited |
 | `maxAgeDays` | `10` | Maximum age of reports in days. `0` = unlimited |
 
@@ -108,14 +114,16 @@ Request bodies are automatically generated from your OpenAPI component schemas. 
 ### Response Chaining
 
 IDs are automatically captured from POST responses and injected into subsequent requests at runtime.
+PUT requests use captured responses from GET requests.
 
 ```
-  -> POST /api/Competition/create  PASSED
-     Captured: competition = 1017
-  -> POST /api/CompetitionRound/create  PASSED
-     Captured: competitionround = 1034
-  -> PUT /api/CompetitionRound/changeactive/1034  PASSED
-  -> GET /api/Competition/1017  PASSED
+  -> POST /api/Holiday/create  PASSED
+     Captured: Holiday = 1017
+  -> POST /api/booking/create  PASSED
+     Captured: Booking = 1034
+  -> GET /api/Booking/1034
+  -> PUT /api/Booking/change-dates/1034  PASSED
+  -> GET /api/Holiday/1017  PASSED
 ```
 
 Works for:
@@ -141,6 +149,10 @@ Endpoints are automatically ordered based on path patterns and HTTP method so th
 Within each group, methods run in order: `POST → GET → PUT → DELETE`.
 
 Tests are further ordered by comparing response values from POST requests to upcoming api paths/request values.
+
+Tests are also ordered by keywords, for example running tests on api paths containing 'remove' after paths containing 'add'.
+
+DELETE requests are run in reverse order from matching GET requests to avoid cascading delete errors.
 
 ### Manual Priority Overrides
 
@@ -183,7 +195,11 @@ Every run prints a summary:
   Total  : 4823 ms
   Avg    : 200 ms
 ================================
-
+================================
+WARNINGS (1):
+Ambigous Path Parameter (1):
+Ambigous path parameter '{id}' in GET /api/entity/otherentity/{id} - rename to specific entity name to improve test accuracy
+================================
 ```
 ### HTML Reports
 
@@ -194,6 +210,7 @@ reports/SmokeAlarm_Report_2026-05-30_16-48-07.html
 ```
 
 Reports include a summary card with pass/fail counts and total duration, and a per-request table with method, path, status code, result, and error details for failed requests.
+It also includes a list of found issues that could disturb test execution.
 
 Use `-saveReports $false` to disable report saving entirely.
 
@@ -258,10 +275,15 @@ see `AzureDevops.yaml` for example
 
 ## Changelog
 
+### 0.4.0
+- **Using GET response in PUT requests** - To more accurately simulate real API behavior
+- **Test Execution Warnings** - Both console and html test summary now includes warnings of endpoint issues that could decrease API readability and disturb test execution.
+- **Improved auto dependency ordering** - endpoint calls on same entities now sorted by additional keywords (add before remove etc.).
+  
 ### 0.3.2
 - **Improved auto dependency ordering** - Added filtering of "other" POST endpoint to depend on create being called first. Deletes are now run in reverse order of creates.
 - **Improved response chaining** - Now finds entity ids in nested response DTOs and uses them in calls where applicable. Also smoothed out some edge cases (matching words ending with "s" etc.) 
-- 
+  
 ### 0.3.1
 - **Auto dependency ordering** — endpoints are now automatically sorted so POST producers run before the endpoints that consume their produced IDs. Manual overrides in `EndpointPriority.ps1` still take precedence
 
