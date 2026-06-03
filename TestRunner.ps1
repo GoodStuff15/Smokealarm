@@ -1,5 +1,5 @@
 # TestRunner.ps1
-# Orchestrates test execution using ResolveEndpoints, EndpointPriority, AuthFlow and TestFramework
+# Orchestrates test execution using ResolveEndpoints, EndpointPriority, AuthFlow, EndpointWarnings and TestFramework
 
 param(
     # Configuration parameters
@@ -23,6 +23,8 @@ param(
 
     $global:capturedIds = @{}
     $script:creationOrder = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $script:getResponses = [System.Collections.Generic.Dictionary[string, object]]::new()
+    $script:warnings = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 function Get-CapturedId {
     param ([string]$paramName, [string]$path)
@@ -31,7 +33,7 @@ function Get-CapturedId {
 
     if ([string]::IsNullOrWhiteSpace($keyword)) {
         $segments = $path.Trim('/') -split '/'
-        
+
         # Try each segment, including hyphenated ones, for a captured ID match
         $keyword = $null
         foreach ($segment in ($segments | Where-Object { $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list|change|set|remove|activate|deactivate'} | Select-Object -Last 3)) {
@@ -47,15 +49,23 @@ function Get-CapturedId {
             if ($keyword) { break }
         }
     }
-    Write-Host "DEBUG GetCapturedId: paramName='$paramName' keyword='$keyword'" -ForegroundColor Gray
 
     if ($keyword) {
+
+        $splitPath = $path.Trim('/') -split '/' | Where-Object { $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list|change|set|remove|activate|deactivate' }
+
         $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+
+        #First try to resolve from path segments if exact keyword match not found
+        if(-not $match) {
+            $match = $splitPath | Where-Object { $global:capturedIds.Keys -like "*$_*" } | Select-Object -First 1
+        }
         if (-not $match) {
             $match = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
         }
-                if ($match) {
-            return [string]$global:capturedIds[$match]
+
+        if ($match) {
+        return [string]$global:capturedIds[$match]
         }
     }
 
@@ -138,11 +148,27 @@ function Get-IdsFromObject {
 }
 
 function Resolve-RequestBody {
-    param ([object]$body)
-    
+    param (
+        [object]$body,
+        [string]$path = ""
+    )
+
     if (-not $body) { return $body }
 
-    $obj = [ordered]@{}  # <-- hashtable instead of PSCustomObject
+    $baseBody = $null
+    if ($path -and $script:getResponses) {
+        $segments = $path.Trim('/') -split '/'
+        $resource = $segments | Where-Object {
+            $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'get|list|by'
+        } | Select-Object -First 1
+
+        if ($resource -and $script:getResponses.ContainsKey($resource.ToLower())) {
+            $baseBody = $script:getResponses[$resource.ToLower()]
+            Write-Host "  USING GET RESPONSE as base for PUT: $($resource.ToLower())" -ForegroundColor DarkCyan
+        }
+    }
+
+    $obj = [ordered]@{}
 
     $properties = if ($body -is [hashtable] -or $body -is [System.Collections.Specialized.OrderedDictionary]) {
         $body.Keys | ForEach-Object { [PSCustomObject]@{ Name = $_; Value = $body[$_] } }
@@ -154,6 +180,14 @@ function Resolve-RequestBody {
         $key   = $prop.Name
         $value = $prop.Value
 
+        if ($baseBody -and $baseBody.PSObject.Properties[$key]) {
+            $getValue = $baseBody.PSObject.Properties[$key].Value
+            if ($null -ne $getValue) {
+                $obj[$key] = $getValue
+                continue
+            }
+        }
+
         if ($null -eq $value) {
             $obj[$key] = $null
             continue
@@ -161,19 +195,18 @@ function Resolve-RequestBody {
 
         if ($value.GetType().Name -like 'List*' -or $value -is [array] -or
             $value -is [System.Collections.ArrayList]) {
-
-            $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-            $matching  = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" }
+            $keyword  = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
+            $matching = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" }
             $arr = if ($matching) {
                 [int[]]@($matching | ForEach-Object { [int]$global:capturedIds[$_] })
             } else {
                 [int[]]@($value)
             }
-            $obj[$key] = [object[]]@($arr)  # force object array, not int array
+            $obj[$key] = [object[]]@($arr)
 
         } elseif ($value -is [int] -or $value -is [long]) {
             $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-            $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+            $match   = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
             if (-not $match) {
                 $match = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
             }
@@ -191,6 +224,7 @@ function Resolve-RequestBody {
 . "$PSScriptRoot\TestFramework.ps1" -baseUrl $baseUrl -accessToken $accessToken
 . "$PSScriptRoot\EndpointPriority.ps1" 
 . "$PSScriptRoot\AuthFlow.ps1"
+. "$PSScriptRoot\EndpointWarnings.ps1"
 
 # ======================
 # 1. Authenticate and get token if credentials provided
@@ -205,6 +239,12 @@ $apiData  = Get-ApiEndpoints -openApiSpecPath $openApiSpecPath
 
 $endpoints = Get-SortedEndpoints -endpoints $apiData.Endpoints -schemas $apiData.Schemas
 
+    # ===
+    # 2.5 Check for endpoint warnings
+    # ===
+    Test-EndpointWarnings -endpoints $endpoints
+
+
 $endpoints = $endpoints | Where-Object {
     $path   = $_.Path
     $method = $_.Method
@@ -218,11 +258,11 @@ $endpoints = $endpoints | Where-Object {
     return $true
 }
 
+
+
 # =====================
 # 3. Run tests
 # =====================
-
-$deleteEndpoints = [System.Collections.Generic.List[object]]::new()
 
 # Pass 1 — run everything except deletes
 foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
@@ -231,8 +271,10 @@ foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
     $resolvedPath = (Resolve-PathParameters -path $endpoint.Path) + 
                     (Resolve-QueryParameters -parameters $endpoint.Parameters)
     $resolvedBody = if ($method -eq 'post' -or $method -eq 'put') {
-        Resolve-RequestBody -body $endpoint.RequestBody
-    } else { $null }
+                        Resolve-RequestBody -body $endpoint.RequestBody -path $endpoint.Path
+                    } else {
+                        $null
+                    }
 
     Write-Host "  -> $($method.ToUpper()) $resolvedPath" -NoNewline
 
@@ -258,25 +300,42 @@ foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
             Format-ErrorBody -body $last.Body -statusCode $last.StatusCode
         }
     }
+
+    if ($method -eq 'get' -and $passed) {
+    $last = $script:resultArray | Select-Object -Last 1
+    if ($last.Body) {
+        try {
+            $parsed = $last.Body | ConvertFrom-Json
+            $segments = $endpoint.Path.Trim('/') -split '/'
+            $resource = $segments | Where-Object {
+                $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'get|list|by'
+            } | Select-Object -First 1
+            if ($resource) {
+                $script:getResponses[$resource.ToLower()] = $parsed
+                Write-Host "  SAVED GET: $($resource.ToLower())" -ForegroundColor DarkCyan
+            }
+        } catch {}
+    }
+}
 }
 
 # Pass 2 — run deletes in reverse creation order
 $allDeletes = $endpoints | Where-Object { $_.Method -eq 'delete' }
 
-# Sort deletes by matching them to creation order, reversed
+# Sort deletes by matching them to creation order, reversed                                                                                                                                                                                                                                 
 $orderedDeletes = [System.Collections.Generic.List[object]]::new()
 
 # First add deletes that match a created resource, in reverse order
 for ($i = $script:creationOrder.Count - 1; $i -ge 0; $i--) {
     $created = $script:creationOrder[$i]
     $postSegment = $created.Path.Trim('/') -split '/' | 
-                   Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|update|delete' } | 
-                   Select-Object -First 1
+                            Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|update|delete' } | 
+                            Select-Object -First 1
 
     $match = $allDeletes | Where-Object {
-        $delSegment = $_.Path.Trim('/') -split '/' | 
-                      Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|update|delete' } | 
-                      Select-Object -First 1
+        $delSegment = $_.Path.Trim('/') -split '/' |                                                                                                                
+                    Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|update|delete' } | 
+                    Select-Object -First 1
         $delSegment -eq $postSegment
     } | Select-Object -First 1
 

@@ -144,13 +144,27 @@ function Resolve-QueryParameters {
     if (-not $parameters) { return '' }
 
     $queryParams = $parameters | Where-Object { $_.in -eq 'query' }
-
     if (-not $queryParams) { return '' }
 
     $parts = foreach ($param in $queryParams) {
-        # Check captured IDs first
-        $keyword  = $param.name -replace 'id$', '' -replace 'Id$', ''
-        $match    = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+        $keyword = $param.name -replace 'Id$', ''
+
+        # 1. Exact match (keyword = keyword)
+        $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+
+        # 2. Exact match ignoring case (kEyWoRd = keyword)
+        if (-not $match) {
+            $match = $global:capturedIds.Keys | Where-Object { $_ -ieq $keyword } | Select-Object -First 1
+        }
+
+        # 3. Prefer shortest key that contains the keyword (keywordId = keyword, someOtherKeywordId != keyword)")
+        if (-not $match) {
+            $match = $global:capturedIds.Keys |
+                Where-Object { $_ -like "*$keyword*" } |
+                Sort-Object Length |
+                Select-Object -First 1
+        }
+
         $captured = if ($match) { [string]$global:capturedIds[$match] } else { $null }
 
         $value = if ($captured) {
@@ -203,6 +217,17 @@ function Get-EndpointDependencies {
         if ($segments.Count -gt 0) {
             $resource = $segments[0].ToLower()
             $producers[$resource] = $ep.Path
+        }
+
+        if ($ep.Method -eq 'put' -and $actionSegment) {
+            $getEp = $endpoints | Where-Object {
+                $_.Method -eq 'get' -and
+                $_.Path -match "/$resourceSegment/" -or $_.Path -match "/$resourceSegment$"
+            } | Select-Object -First 1
+
+            if ($getEp -and -not $deps.Contains($getEp.Path)) {
+                $null = $deps.Add($getEp.Path)
+            }
         }
     }
 
@@ -302,9 +327,30 @@ function Get-SortedEndpoints {
     foreach ($ep in $manualEps) { Visit-Endpoint $ep }
 
     # Non-delete endpoints in dependency order
-    foreach ($ep in ($endpoints | Where-Object { $_.Method -ne 'delete' })) { 
-        Visit-Endpoint $ep 
+    # Introduce keyword-based sorting (e.g. register/login/create/add before update/remove/delete)
+    $keywordOrder = @('register','login','create','add','get','list','update','remove','delete')
+    $keywordPriority = @{ }
+    for ($i = 0; $i -lt $keywordOrder.Count; $i++) { $keywordPriority[$keywordOrder[$i]] = $i }
+
+    function Get-KeywordPriority {
+        param([string]$path)
+        $lower = $path.ToLower()
+        foreach ($kw in $keywordOrder) {
+            if ($lower -like "*${kw}*") { return $keywordPriority[$kw] }
+        }
+        return [int]$keywordOrder.Count
     }
+
+    # Keep method ordering as a secondary key (POST -> GET -> PUT -> DELETE)
+    $methodOrder = @{ 'post' = 1; 'get' = 2; 'put' = 3; 'delete' = 4 }
+    function Get-MethodPriority { param([string]$m) return ($methodOrder[$m] -as [int]) }
+    
+
+    $nonDeleteSorted = $endpoints |
+        Where-Object { $_.Method -ne 'delete' } |
+        Sort-Object -Property @{Expression = { Get-KeywordPriority $_.Path }; Descending = $false}, @{Expression = { Get-MethodPriority $_.Method }; Descending = $false }
+
+    foreach ($ep in $nonDeleteSorted) { Visit-Endpoint $ep }
 
     # Delete endpoints — reverse of their corresponding POST order
     $postPaths   = $endpoints | Where-Object { $_.Method -eq 'post' } | ForEach-Object { $_.Path }
