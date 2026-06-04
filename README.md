@@ -1,7 +1,7 @@
 # SmokeAlarm 
 ## PowerShell API Test Framework
 
-### Current version: 0.4.0
+### Current version: 0.4.1
 #### Last updated: 2026-06-03
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
@@ -275,6 +275,13 @@ see `AzureDevops.yaml` for example
 
 ## Changelog
 
+### 0.4.1
+- **Improved auto dependency ordering** - Adds GETs as dependencies for PUTs if applicable.
+- **Support for more edge cases** -
+    - Sending raw arrays as request bodies
+    - Saving multiple ids from responses
+    - Sending nested DTOs in requests
+  
 ### 0.4.0
 - **Using GET response in PUT requests** - To more accurately simulate real API behavior
 - **Test Execution Warnings** - Both console and html test summary now includes warnings of endpoint issues that could decrease API readability and disturb test execution.
