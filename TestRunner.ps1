@@ -12,7 +12,7 @@ param(
     # Customization options
     [string]$reportLocation = ".\reports\",  # optional path to save HTML report (e.g. ".\reports\")
     [bool]$failOnTestFailures = $true,
-    [string[]]$skipPaths      = @('team-participants'),
+    [string[]]$skipPaths      = @('auth'),
     [string[]]$methods        = @('get','post', 'put', 'delete'),
     [bool]$showDetailedErrors = $true,
     [bool]$saveReports = $true,
@@ -31,24 +31,39 @@ function Get-CapturedId {
 
     $keyword = $paramName -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
 
-    if ([string]::IsNullOrWhiteSpace($keyword)) {
-        $segments = $path.Trim('/') -split '/'
+if ([string]::IsNullOrWhiteSpace($keyword)) {
+    $segments = $path.Trim('/') -split '/'
+    
+    $keyword = $null
+    # Try segments in reverse order, skipping action words
+    $candidates = $segments | Where-Object { 
+        $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and 
+        $_ -notmatch '^(create|add|update|delete|remove|get|list|by|change|set|activate|deactivate|snapshot|report|advance)$'
+    } | Select-Object -Last 3
 
-        # Try each segment, including hyphenated ones, for a captured ID match
-        $keyword = $null
-        foreach ($segment in ($segments | Where-Object { $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list|change|set|remove|activate|deactivate'} | Select-Object -Last 3)) {
-            # Split hyphenated segments and check each part
-            $parts = $segment -split '-'
-            foreach ($part in $parts) {
-                $part = $part -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-                if ($part.Length -gt 2 -and $global:capturedIds.Keys -like "*$part*") {
-                    $keyword = $part
+    foreach ($segment in ($candidates | Sort-Object { $candidates.IndexOf($_) } -Descending)) {
+        $parts = $segment -split '-'
+        foreach ($part in $parts) {
+            $part = $part -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
+            if ($part.Length -gt 2) {
+                $exact = $global:capturedIds.Keys | Where-Object { $_ -eq $part.ToLower() } | Select-Object -First 1
+                $partial = $global:capturedIds.Keys | Where-Object { $_ -like "*$part*" } | Select-Object -First 1
+                if ($exact -or $partial) {
+                    $keyword = $part.ToLower()
                     break
                 }
             }
-            if ($keyword) { break }
         }
+        if ($keyword) { break }
     }
+
+    # If still no match, just use the first meaningful segment as keyword
+    if (-not $keyword) {
+        $keyword = $candidates | Select-Object -First 1
+        if ($keyword) { $keyword = $keyword.ToLower() }
+    }
+    
+}
 
     if ($keyword) {
 
@@ -77,14 +92,19 @@ function Save-ResponseId {
     param (
         [string]$path, 
         [string]$body,
-        [bool]$overwrite = $false
+        [bool]$overwrite = $false,
+        [string]$resourceHint = $null
     )
 
     if ([string]::IsNullOrWhiteSpace($body)) { return }
 
     try {
         $parsed = $body | ConvertFrom-Json
-        Get-IdsFromObject -obj $parsed -path $path -overwrite $overwrite
+
+        $items  = @($parsed)
+        foreach ($item in $items) {
+            Get-IdsFromObject -obj $item -path $path -overwrite $overwrite -resourceHint $resourceHint
+        }
     } catch {
         Write-Host "  WARNING: Could not parse response body for ID extraction" -ForegroundColor DarkYellow
     }
@@ -95,7 +115,8 @@ function Get-IdsFromObject {
         [object]$obj,
         [string]$path,
         [int]$depth = 0,
-        [bool]$overwrite = $false
+        [bool]$overwrite = $false,
+        [string]$resourceHint = $null
     )
 
     if ($depth -gt 10 -or $null -eq $obj) { return }
@@ -120,21 +141,23 @@ function Get-IdsFromObject {
                 # Skip plain 'id' fields in nested objects — they belong to a different resource
                 if (($name -eq 'id' -or $name -eq 'Id') -and $depth -gt 0) { continue }
 
-                    $key = if ($name -eq 'id' -or $name -eq 'Id') {
+                $key = if (($name -eq 'id' -or $name -eq 'Id') -and $resourceHint) {
+                    # Plain 'id' — use hint
+                    $resourceHint.ToLower()
+                } elseif ($name -eq 'id' -or $name -eq 'Id') {
+                    # Plain 'id' — derive from path
                     $segments = $path.Trim('/') -split '/'
-                    $raw = $segments | Where-Object { 
+                    $segments | Where-Object { 
                         $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'create|add|update|delete|get|list'
                     } | Select-Object -Last 1 | ForEach-Object { $_.ToLower() }
-                    # Singularize — strip trailing 's' if result still matches a known segment
-                    if ($raw -match 's$') { $raw -replace 's$', '' } else { $raw }
                 } else {
+                    # Named property like 'participantId' — always derive from property name
                     ($name -replace '[Ii]ds$', '' -replace '[Ii]d$', '').ToLower()
                 }
 
                 if ($key -and $value) {
                     if ($overwrite -or -not $global:capturedIds.ContainsKey($key)) {
                         $global:capturedIds[$key] = $value
-                        Write-Host "  CAPTURED: $key = $value (from '$name' depth=$depth)" -ForegroundColor DarkCyan
                     }
                 }
             }
@@ -153,7 +176,65 @@ function Resolve-RequestBody {
         [string]$path = ""
     )
 
+
     if (-not $body) { return $body }
+Write-Host "DEBUG Resolve-RequestBody: path=$path bodyType=$($body.GetType().FullName)" -ForegroundColor Magenta
+        # Handle raw array bodies
+if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
+    $firstItem = @($body)[0]
+        Write-Host "DEBUG raw array firstItem type=$($firstItem.GetType().FullName) value=$firstItem" -ForegroundColor Magenta
+
+    # If array contains objects/dicts, it's an array of complex DTOs — process normally
+    if ($firstItem -is [System.Collections.Specialized.OrderedDictionary] -or 
+        $firstItem -is [hashtable] -or
+        $firstItem -is [System.Management.Automation.PSCustomObject]) {
+        
+        $resolved = @($body | ForEach-Object { Resolve-RequestBody -body $_ -path $path })
+        return [object[]]@($resolved)
+    }
+
+    # Raw primitive array — inject captured IDs by path keyword
+    $segments = $path.Trim('/') -split '/'
+
+    # Filter meaningful segments
+    $meaningfulSegments = $segments | Where-Object {
+        $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and
+        $_ -notmatch '^(create|add|update|remove|delete|get|list|register|by)$'
+    }
+
+    $keyword = $null
+    foreach ($segment in ($meaningfulSegments | Sort-Object { $meaningfulSegments.IndexOf($_) } -Descending)) {
+        if ($segment -match '-') {
+
+            $parts = $segment -split '-' | Where-Object {
+                $_ -notmatch '^(create|add|update|remove|delete|get|list|register|by)$' -and $_.Length -gt 2
+            }
+            if ($parts) {
+                $keyword = ($parts | Select-Object -Last 1) -replace 's$', ''
+                break
+            }
+        } else {
+            $keyword = $segment -replace 's$', '' -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
+            break
+        }
+    }
+
+    $keyword = $keyword.ToLower()
+
+    $matching = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+    if (-not $matching) {
+        $matching = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+    }
+    
+    if ($matching) {
+                Write-Host "DEBUG raw array returning: $matching = $($global:capturedIds[$matching])" -ForegroundColor Magenta
+
+        return [object[]]@([int]$global:capturedIds[$matching])
+    }
+        Write-Host "DEBUG raw array no match found for keyword='$keyword'" -ForegroundColor Magenta
+
+    return [object[]]@($body)
+}
 
     $baseBody = $null
     if ($path -and $script:getResponses) {
@@ -197,13 +278,20 @@ function Resolve-RequestBody {
             $value -is [System.Collections.ArrayList]) {
             $keyword  = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
             $matching = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" }
+            
             $arr = if ($matching) {
                 [int[]]@($matching | ForEach-Object { [int]$global:capturedIds[$_] })
             } else {
-                [int[]]@($value)
+                # Check if items are complex objects or primitives
+                $firstVal = @($value)[0]
+                if ($firstVal -is [int] -or $firstVal -is [long]) {
+                    [int[]]@($value)
+                } else {
+                    # Complex objects — keep as object array
+                    [object[]]@($value)
+                }
             }
             $obj[$key] = [object[]]@($arr)
-
         } elseif ($value -is [int] -or $value -is [long]) {
             $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
             $match   = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
@@ -216,8 +304,40 @@ function Resolve-RequestBody {
             $obj[$key] = $value
         }
     }
-
     return $obj
+}
+
+function Get-ResponseDtoName {
+    param ($endpoint)
+
+    try {
+        $responses = $endpoint.Responses
+
+        $ok = $responses.PSObject.Properties['200'].Value
+
+        if (-not $ok) { return $null }
+
+        $content = $ok.content
+        if (-not $content) { return $null }
+
+        # Use PSObject.Properties to handle 'application/json' key with dot
+        $jsonContent = $content.PSObject.Properties['application/json'].Value
+        if (-not $jsonContent) { return $null }
+
+        $schema = $jsonContent.schema
+        if (-not $schema) { return $null }
+
+        if ($schema.'$ref') {
+            return extractDtoName -refString $schema.'$ref'
+        }
+
+        if ($schema.type -eq 'array' -and $schema.items.'$ref') {
+            return extractDtoName -refString $schema.items.'$ref'
+        }
+    } catch {
+    }
+
+    return $null
 }
 
 . "$PSScriptRoot\ResolveEndpoints.ps1"
@@ -292,8 +412,30 @@ foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
 
             # Track creation order for reverse delete
             $null = $script:creationOrder.Add($endpoint)
+        } elseif ($method -eq 'get') {
+        $last        = $script:resultArray | Select-Object -Last 1
+        $dtoName     = Get-ResponseDtoName -endpoint $endpoint
+
+        $resourceHint = if ($dtoName) {
+            ($dtoName -replace '^Get', '' -replace 'ResponseDto$','' -replace 'Response$', '' -replace 'Dto$', '' -replace 'Result$', '').ToLower()
+        } else { $null }
+
+        Save-ResponseId -path $endpoint.Path -body $last.Body -overwrite $false -resourceHint $resourceHint
+
+        # Save GET response for PUT pre-population
+        if ($last.Body -and $resourceHint) {
+            try {
+                $parsed = @($last.Body | ConvertFrom-Json)
+                if ($parsed[0]) {
+                    $script:getResponses[$resourceHint] = $parsed[0]
+                    Write-Host "  SAVED GET: $resourceHint (from DTO: $dtoName)" -ForegroundColor DarkCyan
+                }
+            } catch {}
         }
-    } else {
+    }
+    
+    } 
+    else {
         Write-Host "  FAILED" -ForegroundColor Red
         if ($showDetailedErrors) {
             $last = $script:resultArray | Select-Object -Last 1
@@ -301,22 +443,6 @@ foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
         }
     }
 
-    if ($method -eq 'get' -and $passed) {
-    $last = $script:resultArray | Select-Object -Last 1
-    if ($last.Body) {
-        try {
-            $parsed = $last.Body | ConvertFrom-Json
-            $segments = $endpoint.Path.Trim('/') -split '/'
-            $resource = $segments | Where-Object {
-                $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and $_ -notmatch 'get|list|by'
-            } | Select-Object -First 1
-            if ($resource) {
-                $script:getResponses[$resource.ToLower()] = $parsed
-                Write-Host "  SAVED GET: $($resource.ToLower())" -ForegroundColor DarkCyan
-            }
-        } catch {}
-    }
-}
 }
 
 # Pass 2 — run deletes in reverse creation order
