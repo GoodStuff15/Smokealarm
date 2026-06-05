@@ -16,7 +16,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 ### Limitations
 
 - Auth is Bearer token only
-- Request bodies are best-effort based on schema types — complex validation rules may cause 400 errors
+- Request bodies are best-effort based on schema types - complex validation rules may cause 400 errors
 - Sensitive to ambiguity - works best with a clear readable endpoint strucure => api/controller/keyword/{specifiedId} (api/bookings/update/{bookingId}
 
 ---
@@ -125,13 +125,14 @@ PUT requests use captured responses from GET requests.
      Captured: Booking = 1034
   -> GET /api/Booking/1034
   -> PUT /api/Booking/change-dates/1034  PASSED
-  -> GET /api/Holiday/1017  PASSED
+  -> GET /api/Holiday/1017/get-bookings  PASSED
 ```
 
 Works for:
 - **Path parameters** — `/api/Team/{teamId}` → `/api/Team/42`
 - **Query parameters** — `?scheduleId={id}` → `?scheduleId=7`
 - **Request body arrays** — `playerIds: [0]` → `playerIds: [42]`
+- **Raw array requests**
 
 ### Smart Test Ordering
 
@@ -238,6 +239,7 @@ Use `-reportLocation` to save reports to a different folder:
 ```
 
 The folder will be created automatically if it does not exist.
+
 ---
 
 ## CI/CD Integration
