@@ -8,14 +8,16 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 
 ### Advantages
 - Simple to use, just put it in your pipeline, point it towards your api and spec and run it.
-- Filterable (http methods, paths) and configurable (detailed errors, fail pipeline on error)
-- Automatically chains requests — captures IDs from responses and reuses them in subsequent calls
+- Filterable (http methods, paths) - Dont test endpoints you dont want to test
+- Configurable (detailed errors, save reports, fail pipeline on error)
+- Automatically chains requests — captures IDs from responses and reuses them in subsequent calls, otherwise falls back to defaults
 - Generates easy-to-read HTML Reports that facilitates simpler bug hunting
 
 ### Limitations
 
 - Auth is Bearer token only
 - Request bodies are best-effort based on schema types — complex validation rules may cause 400 errors
+- Sensitive to ambiguity - works best with a clear readable endpoint strucure => api/controller/keyword/{specifiedId} (api/bookings/update/{bookingId}
 
 ---
 
@@ -275,6 +277,11 @@ see `AzureDevops.yaml` for example
 
 ## Changelog
 
+### 0.4.2
+- **Added GET missing POST warning** - Added a warning if a GET endpoint doesnt have a corresponding POST / create endpoint. Ignores read-only controllers.
+- **Fix: Removed debug lines** - Removed a few debug lines that was unintentionally left in.
+- **Chore: Clarified a few lines in readme**
+ 
 ### 0.4.1
 - **Improved auto dependency ordering** - Adds GETs as dependencies for PUTs if applicable.
 - **Support for more edge cases** -
