@@ -51,5 +51,26 @@ function Test-EndpointWarnings {
                 Add-Warning -type "Missing GET Endpoint" -message "No GET endpoint found for resource '$resource' — PUT request body cannot be pre-populated with real values"
             }
         }
+
+        # Check for GET endpoints with no corresponding POST create, ignoring common collection endpoints
+        if ($ep.Method -ne 'get') { continue }
+
+        $segments = $ep.Path.Trim('/') -split '/'
+        $resource = $segments | Where-Object {
+            $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and
+            $_ -notmatch 'create|add|update|remove|delete|get|list|by|register'
+        } | Select-Object -First 1
+
+        if (-not $resource) { continue }
+
+        $hasPost = $endpoints | Where-Object {
+            $_.Method -eq 'post' -and
+            $_.Path -match "/$resource/" -and
+            $_.Path -match 'create$'
+        }
+
+        if (-not $hasPost) {
+            Add-Warning -type "No Post For Get" -message "$($ep.Path) — no corresponding POST create endpoint found for resource '$resource'"
+        }
     }
 }

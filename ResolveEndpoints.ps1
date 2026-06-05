@@ -34,7 +34,7 @@ function Get-ApiEndpoints {
             $requestBody = BuildRequestBody -dtoName $dtoName -schemas $schemas
         } elseif ($contentSchema.type -eq 'array') {
 
-            Add-Warning -type "RawArrayBody" -message "$($_.Method.ToUpper()) $($_.Path) has a raw array request body — ID injection is based on path keyword matching and may not be accurate"
+            Add-Warning -type "Raw Array Body" -message "$($_.Method.ToUpper()) $($_.Path) has a raw array request body — ID injection is based on path keyword matching and may not be accurate"
 
             $itemType = $contentSchema.items.type
             $itemRef  = $contentSchema.items.'$ref'
