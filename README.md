@@ -1,8 +1,8 @@
 # SmokeAlarm 
 ## PowerShell API Test Framework
 
-### Current version: 0.4.1
-#### Last updated: 2026-06-03
+### Current version: 0.4.2
+#### Last updated: 2026-06-05
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
