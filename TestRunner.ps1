@@ -178,11 +178,9 @@ function Resolve-RequestBody {
 
 
     if (-not $body) { return $body }
-Write-Host "DEBUG Resolve-RequestBody: path=$path bodyType=$($body.GetType().FullName)" -ForegroundColor Magenta
         # Handle raw array bodies
 if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
     $firstItem = @($body)[0]
-        Write-Host "DEBUG raw array firstItem type=$($firstItem.GetType().FullName) value=$firstItem" -ForegroundColor Magenta
 
     # If array contains objects/dicts, it's an array of complex DTOs — process normally
     if ($firstItem -is [System.Collections.Specialized.OrderedDictionary] -or 
@@ -227,11 +225,9 @@ if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
     }
     
     if ($matching) {
-                Write-Host "DEBUG raw array returning: $matching = $($global:capturedIds[$matching])" -ForegroundColor Magenta
 
         return [object[]]@([int]$global:capturedIds[$matching])
     }
-        Write-Host "DEBUG raw array no match found for keyword='$keyword'" -ForegroundColor Magenta
 
     return [object[]]@($body)
 }
