@@ -1,8 +1,8 @@
 # SmokeAlarm 
 ## PowerShell API Test Framework
 
-### Current version: 0.4.2
-#### Last updated: 2026-06-05
+### Current version: 0.5.0
+#### Last updated: 2026-06-06
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
@@ -91,6 +91,7 @@ A lightweight, OpenAPI-driven test framework for automatically generating and ru
 | `reportLocation` | `.\reports\` | Folder path where HTML reports are saved |
 | `maxReports` | `10` | Maximum number of reports to keep. Oldest are removed first. `0` = unlimited |
 | `maxAgeDays` | `10` | Maximum age of reports in days. `0` = unlimited |
+| `overridesPath` | `.\requestOverrides.json` | Path to load manual overrides from |
 
 ---
 
@@ -240,6 +241,81 @@ Use `-reportLocation` to save reports to a different folder:
 
 The folder will be created automatically if it does not exist.
 
+### Request Overrides
+
+SmokeAlarm can generate a `requestOverrides.json` file pre-populated with all endpoints and their auto-generated request bodies. You can then manually edit specific entries and enable them to take precedence over the auto-generated requests.
+
+#### Generating the overrides file
+
+```powershell
+.\GenerateOverrides.ps1 -openApiSpecPath ".\swagger.json" -outputPath ".\requestOverrides.json"
+```
+
+This generates a file with one entry per endpoint, all disabled by default:
+
+```json
+[
+  {
+    "method": "POST",
+    "path": "/api/Competition/create",
+    "enabled": false,
+    "body": {
+      "name": "test",
+      "description": "test",
+      "isActive": false,
+      "competitionTypeId": 2,
+      "competitionPresetId": 2
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/api/Competition/{competitionId}",
+    "enabled": false,
+    "pathParameters": {
+      "competitionId": 1
+    }
+  }
+]
+```
+
+#### Enabling an override
+
+Set `enabled` to `true` and edit the values as needed:
+
+```json
+{
+  "method": "POST",
+  "path": "/api/Booking/create",
+  "enabled": true,
+  "body": {
+    "name": "My Booking",
+    "description": "A small room",
+    "isActive": true,
+    "bookingTypeId": 1,
+    "customerTypeId": 3
+  }
+}
+```
+
+When an override is enabled, it replaces the auto-generated request entirely - path parameters, query parameters, and body are all taken from the override file. Enabled overrides are marked as **MANUAL** in both the console output and the HTML report.
+
+#### Use cases
+
+- Endpoints that require specific business logic state (e.g. a schedule must be in a certain mode before advancing players)
+- Endpoints with polymorphic request bodies that can't be auto-generated
+- Endpoints with complex validation rules that placeholder values can't satisfy
+- Pinning specific IDs or values across test runs for reproducibility
+
+#### Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `openApiSpecPath` | `.\swagger.json` | Path to your OpenAPI spec |
+| `outputPath` | `.\requestOverrides.json` | Where to save the generated overrides file |
+| `overridesPath` | `.\requestOverrides.json` | Path passed to the test runner to load overrides from |
+
+**Note:** Re-generating the overrides file is safe — existing entries and manual edits are preserved. 
+> Only new endpoints are added. Endpoints removed from the API will be dropped on the next generation.
 ---
 
 ## CI/CD Integration
@@ -278,6 +354,9 @@ see `AzureDevops.yaml` for example
 ---
 
 ## Changelog
+
+### 0.5.0
+- **Added manual request overrides** - 
 
 ### 0.4.2
 - **Added GET missing POST warning** - Added a warning if a GET endpoint doesnt have a corresponding POST / create endpoint. Ignores read-only controllers.
