@@ -6,6 +6,16 @@ function New-RequestOverrides {
 
     . "$PSScriptRoot\ResolveEndpoints.ps1"
 
+    $existingOverrides = @{}
+    if (Test-Path $outputPath) {
+        $existing = Get-Content -Raw -Path $outputPath | ConvertFrom-Json
+        foreach ($entry in $existing) {
+            $key = "$($entry.method.ToUpper()):$($entry.path)"
+            $existingOverrides[$key] = $entry
+        }
+        Write-Host "Found existing overrides file — merging new endpoints only" -ForegroundColor DarkCyan
+    }
+
     $spec    = Get-Content -Raw -Path $openApiSpecPath | ConvertFrom-Json
     $schemas = $spec.components.schemas
     $entries = [System.Collections.Generic.List[object]]::new()
@@ -16,10 +26,17 @@ function New-RequestOverrides {
         foreach ($methodItem in $pathItem.Value.PSObject.Properties) {
             $method = $methodItem.Name
             $detail = $methodItem.Value
-
-            # Re-parse to ensure proper deserialization of nested objects
             $detail = $detail | ConvertTo-Json -Depth 20 | ConvertFrom-Json
 
+            $key = "$($method.ToUpper()):$($path)"
+
+            # Keep existing entry if it exists — preserves manual edits
+            if ($existingOverrides.ContainsKey($key)) {
+                $null = $entries.Add($existingOverrides[$key])
+                continue
+            }
+
+            # Otherwise generate new entry
             $entry = [ordered]@{
                 method  = $method.ToUpper()
                 path    = $path
