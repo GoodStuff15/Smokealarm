@@ -1,5 +1,23 @@
     . "$PSScriptRoot\EndpointWarnings.ps1"
 
+    function Get-RequestOverrides {
+    param ([string]$overridesPath = ".\requestOverrides.json")
+
+    if (-not $overridesPath -or -not (Test-Path $overridesPath)) { return @{} }
+
+    $overrides = Get-Content -Raw -Path $overridesPath | ConvertFrom-Json
+    $map       = @{}
+
+    foreach ($override in $overrides) {
+        if ($override.enabled -ne $true) { continue }
+        $key        = "$($override.method.ToUpper()):$($override.path)"
+        $map[$key]  = $override
+    }
+
+    Write-Host "Loaded $($map.Count) active request override(s)" -ForegroundColor Cyan
+    return $map
+}
+
 function Get-ApiEndpoints {
     param(
         [string]$openApiSpecPath = "swagger.json"
