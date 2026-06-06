@@ -25,6 +25,7 @@ param(
     $script:creationOrder = [System.Collections.Generic.List[PSCustomObject]]::new()
     $script:getResponses = [System.Collections.Generic.Dictionary[string, object]]::new()
     $script:warnings = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $script:requestOverrides = Get-RequestOverrides -overridesPath $overridesPath
 
 function Get-CapturedId {
     param ([string]$paramName, [string]$path)
@@ -341,6 +342,7 @@ function Get-ResponseDtoName {
 . "$PSScriptRoot\EndpointPriority.ps1" 
 . "$PSScriptRoot\AuthFlow.ps1"
 . "$PSScriptRoot\EndpointWarnings.ps1"
+. "$PSScriptRoot\New-RequestOverrides.ps1"
 
 # ======================
 # 1. Authenticate and get token if credentials provided
@@ -384,13 +386,43 @@ $endpoints = $endpoints | Where-Object {
 foreach ($endpoint in ($endpoints | Where-Object { $_.Method -ne 'delete' })) {
 
     $method       = $endpoint.Method
-    $resolvedPath = (Resolve-PathParameters -path $endpoint.Path) + 
+    $overrideKey  = "$($method.ToUpper()):$($endpoint.Path)"
+$override     = $script:requestOverrides[$overrideKey]
+
+if ($override) {
+    # Use manual override
+    $resolvedPath = $endpoint.Path
+    
+    # Apply path parameters
+    if ($override.pathParameters) {
+        foreach ($param in $override.pathParameters.PSObject.Properties) {
+            $resolvedPath = $resolvedPath -replace "\{$($param.Name)\}", $param.Value
+        }
+    }
+    
+    # Apply query parameters
+    if ($override.queryParameters) {
+        $queryString = ($override.queryParameters.PSObject.Properties | ForEach-Object {
+            "$($_.Name)=$($_.Value)"
+        }) -join '&'
+        $resolvedPath = "$resolvedPath?$queryString"
+    }
+
+    $resolvedBody = if ($override.body) {
+        $override.body
+    } else { $null }
+
+    $isManualOverride = $true
+} else {
+    # Normal auto-resolution
+    $resolvedPath = (Resolve-PathParameters -path $endpoint.Path) +
                     (Resolve-QueryParameters -parameters $endpoint.Parameters)
     $resolvedBody = if ($method -eq 'post' -or $method -eq 'put') {
-                        Resolve-RequestBody -body $endpoint.RequestBody -path $endpoint.Path
-                    } else {
-                        $null
-                    }
+        Resolve-RequestBody -body $endpoint.RequestBody -path $endpoint.Path
+    } else { $null }
+
+    $isManualOverride = $false
+}
 
     Write-Host "  -> $($method.ToUpper()) $resolvedPath" -NoNewline
 

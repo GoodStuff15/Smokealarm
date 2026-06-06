@@ -15,7 +15,7 @@ function Get-AuthHeaders {
 }
 
 function Add-Result {
-    param($url, $method, $response, $errorBody = $null, $durationMs, [int[]]$expectedStatusCodes)
+    param($url, $method, $response, $errorBody = $null, $durationMs, [int[]]$expectedStatusCodes, $isManual = $false)
 
     $code   = if ($response) { $response.StatusCode } else { $null }
     $passed = ($code -in $expectedStatusCodes)
@@ -33,6 +33,7 @@ function Add-Result {
         DurationMs = $durationMs
         Body       = $body
         Response   = $response
+        IsManual   = $isManual
     })
 
     return $passed
@@ -69,7 +70,7 @@ function RunPostRequest {
         $sw.Stop()
     }
 
-    return Add-Result -url $fullUrl -method "POST" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes
+    return Add-Result -url $fullUrl -method "POST" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes -isManual $isManualOverride
 }
 
 function RunGetRequest {
@@ -101,7 +102,7 @@ function RunGetRequest {
         $sw.Stop()
     }
 
-    return Add-Result -url $fullUrl -method "GET" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes
+    return Add-Result -url $fullUrl -method "GET" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes -isManual $isManualOverride
 }
 
 function RunPutRequest {
@@ -134,7 +135,7 @@ function RunPutRequest {
         $sw.Stop()
     }
 
-    return Add-Result -url $fullUrl -method "PUT" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes
+    return Add-Result -url $fullUrl -method "PUT" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes -isManual $isManualOverride
 }
 
 function RunDeleteRequest {
@@ -164,7 +165,7 @@ function RunDeleteRequest {
         $sw.Stop()
     }
 
-    return Add-Result -url $fullUrl -method "DELETE" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes
+    return Add-Result -url $fullUrl -method "DELETE" -response $response -errorBody $errorBody -durationMs $sw.ElapsedMilliseconds -expectedStatusCodes $expectedStatusCodes -isManual $isManualOverride
 }
 
 function Get-TestSummary {
@@ -285,6 +286,7 @@ function Write-HtmlReport {
     $failColor = "#f44336"
 
     $rows = $results | ForEach-Object {
+        $manualBadge = if ($_.IsManual) { "<span class='manual-badge'>MANUAL</span>" } else { "" }
         $statusColor = if ($_.Passed) { $passColor } else { $failColor }
         $passText    = if ($_.Passed) { "PASSED" } else { "FAILED" }
         $body        = if (-not $_.Passed -and $_.Body) {
@@ -294,8 +296,9 @@ function Write-HtmlReport {
 
         @"
         <tr>
+        <tr>
             <td><span class="method method-$($_.Method.ToLower())">$($_.Method.ToUpper())</span></td>
-            <td class="path">$($_.Url)</td>
+            <td class="path">$($_.Url) $manualBadge</td>
             <td style="color:$statusColor;font-weight:bold">$passText</td>
             <td>$($_.StatusCode)</td>
             <td>$($_.DurationMs) ms</td>
