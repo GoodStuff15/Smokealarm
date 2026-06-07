@@ -6,6 +6,8 @@
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
+Also includes option to manually enter test requests in json http request format. 
+
 ### Advantages
 - Simple to use, just put it in your pipeline, point it towards your api and spec and run it.
 - Filterable (http methods, paths) - Dont test endpoints you dont want to test
