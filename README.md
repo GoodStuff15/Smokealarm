@@ -2,7 +2,7 @@
 ## PowerShell API Test Framework
 
 ### Current version: 0.5.1
-#### Last updated: 2026-06-06
+#### Last updated: 2026-06-16
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
