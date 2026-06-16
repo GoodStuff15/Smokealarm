@@ -111,6 +111,10 @@ function Resolve-PropertyValue {
         return $null
     }
 
+    if ($propSchema.enum) {
+        return $propSchema.enum[0]
+    }
+
     $value = switch ($type) {
         'integer' { 2 }
         'number'  { 0.0 }
@@ -130,9 +134,11 @@ function Resolve-PropertyValue {
             $list = [System.Collections.Generic.List[object]]::new()
 
             if ($itemRef) {
-                # Array of complex objects — build a sample request body for the referenced DTO
                 $refName = extractDtoName -refString $itemRef
                 $null = $list.Add((BuildRequestBody -dtoName $refName -schemas $schemas))
+            # ✅ ADD THIS — array of inline enum strings
+            } elseif ($items -and $items.enum) {
+                $null = $list.Add($items.enum[0])
             } else {
                 switch ($itemType) {
                     'integer' { $null = $list.Add(1); $null = $list.Add(2) }
