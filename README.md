@@ -1,8 +1,8 @@
 # SmokeAlarm 
 ## PowerShell API Test Framework
 
-### Current version: 0.5.1
-#### Last updated: 2026-06-16
+### Current version: 0.6.0
+#### Last updated: 2026-06-22
 
 A lightweight, OpenAPI-driven test framework for automatically generating and running simple API smoke tests from a Swagger/OpenAPI spec. 
 
@@ -31,6 +31,7 @@ Also includes option to manually enter test requests in json http request format
 4. **EndpointPriority.ps1** controls execution order, auto-prioritized by path pattern with optional manual overrides
 5. **AuthFlow.ps1** handles optional login using pipeline secrets
 6. **EndpointWarnings.ps1** looks trough endpoint calls for possible issues with test framework and collects them for presentation
+7. **Run-SmokeTests.ps1** Runs the tests locally in an easier to set-up format.
 ---
 
 ## Project Structure
@@ -60,6 +61,8 @@ Also includes option to manually enter test requests in json http request format
 
 ### Run locally
 
+#### Powershell 
+
 ```powershell
 .\TestRunner.ps1 `
   -openApiSpecPath ".\swagger.json" `
@@ -76,7 +79,30 @@ Also includes option to manually enter test requests in json http request format
   -
 ```
 
-### Parameters
+#### Run-Smoketests
+
+Drop `Run-SmokeTests.ps1` into the solution root alongside `testrunner.ps1` and run it:
+
+```powershell
+.\Run-SmokeTests.ps1
+```
+
+**First run:** auto-detects the OpenAPI spec and base URL from `launchSettings.json`, prompts for any missing config, and saves everything to `smoketest.config.json`.
+
+**Subsequent runs:** reads the config and runs immediately — no arguments needed.
+
+##### Authentication
+Credentials are read from environment variables at runtime:
+```powershell
+$env:SMOKETEST_USERNAME = "admin"
+$env:SMOKETEST_PASSWORD = "yourpassword"
+```
+For a long-lasting token (e.g. in local dev), set `accessToken` directly in `smoketest.config.json` and credentials will be skipped.
+
+##### Configuration
+Edit `smoketest.config.json` to customise behaviour — skip paths, limit HTTP methods, control report retention, etc. The file is created with sensible defaults on first run.
+
+##### Parameters
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -356,6 +382,10 @@ see `AzureDevops.yaml` for example
 ---
 
 ## Changelog
+
+### 0.6.0
+- **Feature: Added Run-SmokeTests.ps1** - to simplify running tests locally in development
+- **Fix: Further enum improvements**
 
 ### 0.5.1 
 - **Fix: Better detection and usage of Enum values**
