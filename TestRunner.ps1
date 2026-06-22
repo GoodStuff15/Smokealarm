@@ -25,7 +25,7 @@ param(
     $script:creationOrder = [System.Collections.Generic.List[PSCustomObject]]::new()
     $script:getResponses = [System.Collections.Generic.Dictionary[string, object]]::new()
     $script:warnings = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $script:requestOverrides = Get-RequestOverrides -overridesPath $overridesPath
+
 
 function Get-CapturedId {
     param ([string]$paramName, [string]$path)
@@ -343,6 +343,9 @@ function Get-ResponseDtoName {
 . "$PSScriptRoot\AuthFlow.ps1"
 . "$PSScriptRoot\EndpointWarnings.ps1"
 . "$PSScriptRoot\New-RequestOverrides.ps1"
+. "$PSScriptRoot\GenerateOverrides.ps1"
+
+$script:requestOverrides = Get-RequestOverrides
 
 # ======================
 # 1. Authenticate and get token if credentials provided
