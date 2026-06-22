@@ -431,10 +431,11 @@ function Get-SortedEndpoints {
     function Get-MethodPriority { param([string]$m) return ($methodOrder[$m] -as [int]) }
     
 
-    $nonDeleteSorted = $endpoints |
-        Where-Object { $_.Method -ne 'delete' } |
-        Sort-Object -Property @{Expression = { Get-KeywordPriority $_.Path }; Descending = $false}, @{Expression = { Get-MethodPriority $_.Method }; Descending = $false }
-
+$nonDeleteSorted = $endpoints |
+    Where-Object { $_.Method -ne 'delete' } |
+    Sort-Object -Property @{Expression = { Get-KeywordPriority $_.Path }; Descending = $false},
+                          @{Expression = { Get-MethodPriority $_.Method }; Descending = $false },
+                          @{Expression = { if ($_.Path -match '\{') { 1 } else { 0 } }; Descending = $false }
     foreach ($ep in $nonDeleteSorted) { Add-EndpointToSorted $ep }
 
     # Delete endpoints — reverse of their corresponding POST order
