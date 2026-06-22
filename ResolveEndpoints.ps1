@@ -136,7 +136,6 @@ function Resolve-PropertyValue {
             if ($itemRef) {
                 $refName = extractDtoName -refString $itemRef
                 $null = $list.Add((BuildRequestBody -dtoName $refName -schemas $schemas))
-            # ✅ ADD THIS — array of inline enum strings
             } elseif ($items -and $items.enum) {
                 $null = $list.Add($items.enum[0])
             } else {
@@ -236,17 +235,20 @@ function Resolve-QueryParameters {
                     switch ($param.schema.format) {
                         'date-time' { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ') }
                         'date'      { (Get-Date).ToString('yyyy-MM-dd') }
-                        default     { 'test' }
+                        default     {
+                            if ($param.schema.enum) { [string]$param.schema.enum[0] }
+                            else { $null }  # skip unknown strings — avoids invalid enum values
+                        }
                     }
                 }
                 default { '2' }
             }
         }
 
-        "$($param.name)=$value"
+        if ($null -ne $value) { "$($param.name)=$value" }
     }
 
-    return '?' + ($parts -join '&')
+    if ($parts) { return '?' + ($parts -join '&') } else { return '' }
 }
 
 
@@ -273,7 +275,7 @@ function Get-EndpointDependencies {
 
         $segments = $ep.Path.Split('/') | Where-Object { $_ -and $_ -notmatch '^api$' }
         if ($segments.Count -gt 0) {
-            $resource = $segments[0].ToLower()
+            $resource = ([string]$segments[0]).ToLower()  
             
             $isCreate = $ep.Path -match 'create$'
             if (-not $producers.ContainsKey($resource) -or $isCreate) {
