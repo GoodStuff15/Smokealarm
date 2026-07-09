@@ -62,7 +62,7 @@ function Get-ApiEndpoints {
                 $requestBody = @(BuildRequestBody -dtoName $refName -schemas $schemas)
             } else {
                 $requestBody = switch ($itemType) {
-                    'integer' { @(1, 2) }
+                    'integer' { @(1) }
                     'string'  { @('test') }
                     default   { @(1) }
                 }
@@ -116,7 +116,7 @@ function Resolve-PropertyValue {
     }
 
     $value = switch ($type) {
-        'integer' { 2 }
+        'integer' { 1 }
         'number'  { 0.0 }
         'boolean' { $false }
         'string'  {
@@ -228,7 +228,7 @@ function Resolve-QueryParameters {
             $captured
         } else {
             switch ($param.schema.type) {
-                'integer' { '2' }
+                'integer' { '1' }
                 'number'  { '0.0' }
                 'boolean' { 'true' }
                 'string'  {
@@ -241,7 +241,7 @@ function Resolve-QueryParameters {
                         }
                     }
                 }
-                default { '2' }
+                default { '1' }
             }
         }
 
@@ -270,30 +270,25 @@ function Get-EndpointDependencies {
 
     $producers = @{}
 
-    foreach ($ep in $endpoints) {
-        if ($ep.Method -ne 'post') { continue }
+foreach ($ep in $endpoints) {
 
-        $segments = $ep.Path.Split('/') | Where-Object { $_ -and $_ -notmatch '^api$' }
-        if ($segments.Count -gt 0) {
-            $resource = ([string]$segments[0]).ToLower()  
-            
-            $isCreate = $ep.Path -match 'create$'
+    if ($ep.Method -ne 'post') { continue }
+
+    $segments = $ep.Path.Split('/') | Where-Object { $_ -and $_ -notmatch '^api$' }
+    if ($segments.Count -gt 0) {
+        $resource = ([string]$segments[0]).ToLower().TrimEnd('s')
+
+        # Only register plain POSTs as producers — skip action endpoints and parameterised paths
+        $isPlain = $ep.Path -notmatch '\{' -and $segments.Count -eq 1
+        $isCreate = $ep.Path -match 'create$' -and $ep.Path -notmatch '\{'
+
+        if ($isPlain -or $isCreate) {
             if (-not $producers.ContainsKey($resource) -or $isCreate) {
                 $producers[$resource] = $ep.Path
             }
         }
-
-        if ($ep.Method -eq 'put' -and $actionSegment) {
-            $getEp = $endpoints | Where-Object {
-                $_.Method -eq 'get' -and
-                $_.Path -match "/$resourceSegment/" -or $_.Path -match "/$resourceSegment$"
-            } | Select-Object -First 1
-
-            if ($getEp -and -not $deps.Contains($getEp.Path)) {
-                $null = $deps.Add($getEp.Path)
-            }
-        }
     }
+}
 
     $dependencies = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new()
 
@@ -304,28 +299,48 @@ function Get-EndpointDependencies {
         # Check path parameters
         $paramMatches = [regex]::Matches($ep.Path, '\{(\w+)\}')
         foreach ($match in $paramMatches) {
-            $paramName = $match.Groups[1].Value.ToLower()
+            $paramName = $match.Groups[1].Value.ToLower().TrimEnd('s') -replace 'id$', ''
             foreach ($resource in $producers.Keys) {
-                if ($paramName -like "*$resource*") {
-                    $null = $deps.Add($producers[$resource])
+                if ($paramName -like "*$resource*" -or $resource -like "*$paramName*") {
+                    $depPath = $producers[$resource]
+                    if ($depPath -ne $ep.Path -and -not $deps.Contains($depPath)) {  # skip self
+                        $null = $deps.Add($depPath)
+                    }
                 }
             }
         }
 
         # Check request body fields
+
         if ($ep.RequestBodyRef) {
             $dtoName = extractDtoName -refString $ep.RequestBodyRef
             $schema  = $schemas.PSObject.Properties[$dtoName].Value
             if ($schema -and $schema.properties) {
-                foreach ($prop in $schema.properties.PSObject.Properties) {
+                                foreach ($prop in $schema.properties.PSObject.Properties) {
                     $propName = $prop.Name.ToLower()
+                    if ($propName -notlike "*id*") { continue }
+                    
+                    # Strip 'id' suffix to get the resource name hint
+                    $hint = $propName -replace 'id$', ''
+
+                    # Also extract last camelCase word before 'Id' e.g. competitionRoundStageId -> stage
+                    $shortHint = ($prop.Name -creplace '.*?([A-Z][a-z]+)Id$', '$1').ToLower()
+                    
                     foreach ($resource in $producers.Keys) {
-                        if ($propName -like "*$resource*" -and $propName -like "*id*") {
-                            if (-not $deps.Contains($producers[$resource])) {
-                                $null = $deps.Add($producers[$resource])
+                        $normHint      = $hint.TrimEnd('s')
+                        $normShortHint = $shortHint.TrimEnd('s')
+                        $normResource  = $resource.TrimEnd('s')
+                        
+                        if ($normHint -eq $normResource -or 
+                            $normResource -like "*$normHint*" -or 
+                            $normHint -like "*$normResource*" -or
+                            $normShortHint -eq $normResource) {
+                            $depPath = $producers[$resource]
+                            if ($depPath -ne $ep.Path -and -not $deps.Contains($depPath)) {
+                                $null = $deps.Add($depPath)
                             }
                         }
-                    } 
+                    }
                 }
             }
         }
@@ -379,11 +394,11 @@ $actionSegment = $segments | Where-Object { $_ -match '-' -or $_ -match "^($acti
 function Get-SortedEndpoints {
     param (
         [array]$endpoints,
-        $schemas
+        $schemas,
+        [string[]]$postOrder = @()
     )
-
+    
     $dependencies = Get-EndpointDependencies -endpoints $endpoints -schemas $schemas
-
     $sorted       = [System.Collections.Generic.List[object]]::new()
     $visited      = [System.Collections.Generic.HashSet[string]]::new()
 
@@ -395,8 +410,7 @@ function Get-SortedEndpoints {
 
         if ($dependencies.ContainsKey($key)) {
             foreach ($depPath in $dependencies[$key]) {
-                # Find dependency regardless of method, not just POST
-                $depEp = $endpoints | Where-Object { $_.Path -eq $depPath } | Select-Object -First 1
+                $depEp = $endpoints | Where-Object { $_.Path -eq $depPath -and $_.Method -eq 'post' } | Select-Object -First 1
                 if ($depEp) { Add-EndpointToSorted $depEp }
             }
         }
@@ -404,66 +418,39 @@ function Get-SortedEndpoints {
         $null = $sorted.Add($ep)
     }
 
-    # Manual priorities first
-    $manualEps = $endpoints | Where-Object {
-        (Get-EndpointPriority -path $_.Path -method $_.Method) -ne 999
-    } | Sort-Object { Get-EndpointPriority -path $_.Path -method $_.Method }
+# Phase 1 — plain POSTs in configured or dependency order
 
-    foreach ($ep in $manualEps) { Add-EndpointToSorted $ep }
+$plainPosts = $endpoints | Where-Object { 
+    $_.Method -eq 'post' -and (Get-EndpointPriority -path $_.Path -method $_.Method) -lt 100 
+}
 
-    # Non-delete endpoints in dependency order
-    # Introduce keyword-based sorting (e.g. register/login/create/add before update/remove/delete)
-    $keywordOrder = @('register','login','create','add','get','list','update','remove','delete')
-    $keywordPriority = @{ }
-    for ($i = 0; $i -lt $keywordOrder.Count; $i++) { $keywordPriority[$keywordOrder[$i]] = $i }
+if ($postOrder) {
+    # Sort by position in configured list, unknowns go last
+    $orderedPosts = $postOrder | ForEach-Object {
+        $o = $_
+        $plainPosts | Where-Object { $_.Path -eq $o } | Select-Object -First 1
+    } | Where-Object { $_ }
+    # Append any not in the list
+    $remainder = $plainPosts | Where-Object { $_.Path -notin $postOrder }
+    $orderedPosts = @($orderedPosts) + @($remainder)
+} else {
+    $orderedPosts = $plainPosts | Sort-Object { [int](Get-EndpointPriority -path $_.Path -method $_.Method) }
+}
 
-    function Get-KeywordPriority {
-        param([string]$path)
-        $lower = $path.ToLower()
-        foreach ($kw in $keywordOrder) {
-            if ($lower -like "*${kw}*") { return $keywordPriority[$kw] }
-        }
-        return [int]$keywordOrder.Count
+foreach ($ep in $orderedPosts) { 
+    $key = "$($ep.Method):$($ep.Path)"
+    if (-not $visited.Contains($key)) {
+        $null = $visited.Add($key)
+        $null = $sorted.Add($ep)  # bypass Add-EndpointToSorted entirely
     }
+}
 
-    # Keep method ordering as a secondary key (POST -> GET -> PUT -> DELETE)
-    $methodOrder = @{ 'post' = 1; 'get' = 2; 'put' = 3; 'delete' = 4 }
-    function Get-MethodPriority { param([string]$m) return ($methodOrder[$m] -as [int]) }
-    
+    # Phase 2 — everything else in priority order
+    $rest = $endpoints |
+        Where-Object { -not $visited.Contains("$($_.Method):$($_.Path)") } |
+        Sort-Object { [int](Get-EndpointPriority -path $_.Path -method $_.Method) }
 
-$nonDeleteSorted = $endpoints |
-    Where-Object { $_.Method -ne 'delete' } |
-    Sort-Object -Property @{Expression = { Get-KeywordPriority $_.Path }; Descending = $false},
-                          @{Expression = { Get-MethodPriority $_.Method }; Descending = $false },
-                          @{Expression = { if ($_.Path -match '\{') { 1 } else { 0 } }; Descending = $false }
-    foreach ($ep in $nonDeleteSorted) { Add-EndpointToSorted $ep }
-
-    # Delete endpoints — reverse of their corresponding POST order
-    $postPaths   = $endpoints | Where-Object { $_.Method -eq 'post' } | ForEach-Object { $_.Path }
-    $deleteEps   = $endpoints | Where-Object { $_.Method -eq 'delete' }
-
-    # Match each delete to its corresponding post path and sort in reverse
-    $orderedDeletes = $postPaths | ForEach-Object {
-        $postPath = $_
-        # Find a delete endpoint whose path shares the same resource segment
-        $deleteEps | Where-Object {
-            $delSegments  = $_.Path.Trim('/') -split '/'
-                $postSegments = $postPath.Trim('/') -split '/'
-            $delResource  = $delSegments | Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|delete|update' } | Select-Object -First 1
-            $postResource = $postSegments | Where-Object { $_ -notmatch '^api$|^\{|\d+|create|add|delete|update' } | Select-Object -First 1
-            $delResource -eq $postResource
-        } | Select-Object -First 1
-    } | Where-Object { $_ } | Sort-Object { $postPaths.IndexOf($_.Path) } -Descending
-
-    # Add any deletes that didn't match a post last
-    $unmatchedDeletes = $deleteEps | Where-Object { 
-        $ep = $_
-        -not ($orderedDeletes | Where-Object { $_.Path -eq $ep.Path })
-    }
-
-    foreach ($ep in ($orderedDeletes + $unmatchedDeletes)) { 
-        Add-EndpointToSorted $ep 
-    }
+    foreach ($ep in $rest) { $null = $sorted.Add($ep) }
 
     return $sorted.ToArray()
 }

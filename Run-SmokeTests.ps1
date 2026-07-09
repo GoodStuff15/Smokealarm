@@ -5,36 +5,36 @@
 Set-StrictMode -Off
 $ErrorActionPreference = "Stop"
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# -- Paths --------------------------------------------------------------------
 $scriptRoot  = $PSScriptRoot
 $configPath  = Join-Path $scriptRoot "smoketest.config.json"
 $runnerPath  = Join-Path $scriptRoot "testrunner.ps1"
 
-# ── Colours ──────────────────────────────────────────────────────────────────
+# -- Colours ------------------------------------------------------------------
 function Write-Header {
     Clear-Host
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║       API Smoke Test Launcher        ║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "  +======================================+" -ForegroundColor Cyan
+    Write-Host "  |       API Smoke Test Launcher        |" -ForegroundColor Cyan
+    Write-Host "  +======================================+" -ForegroundColor Cyan
     Write-Host ""
 }
 
-function Write-Ok($msg)   { Write-Host "  ✅ $msg" -ForegroundColor Green  }
-function Write-Warn($msg) { Write-Host "  ⚠️  $msg" -ForegroundColor Yellow }
-function Write-Err($msg)  { Write-Host "  ❌ $msg" -ForegroundColor Red    }
-function Write-Info($msg) { Write-Host "  ℹ️  $msg" -ForegroundColor Cyan   }
+function Write-Ok($msg)   { Write-Host "  [OK] $msg" -ForegroundColor Green  }
+function Write-Warn($msg) { Write-Host "  [WARN]  $msg" -ForegroundColor Yellow }
+function Write-Err($msg)  { Write-Host "  [ERR] $msg" -ForegroundColor Red    }
+function Write-Info($msg) { Write-Host "  [INFO]  $msg" -ForegroundColor Cyan   }
 function Write-Blank      { Write-Host "" }
 
 function Prompt-User($label, [switch]$secret) {
-    Write-Host "  → $label`: " -ForegroundColor White -NoNewline
+    Write-Host "  -> $label`: " -ForegroundColor White -NoNewline
     if ($secret) { Read-Host -AsSecureString | ForEach-Object {
         [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($_)) }
     } else { Read-Host }
 }
 
-# ── Swagger / OpenAPI discovery ───────────────────────────────────────────────
+# -- Swagger / OpenAPI discovery -----------------------------------------------
 $swaggerCandidateNames = @(
     # swagger.*
     "swagger.json", "swagger.yaml", "swagger.yml",
@@ -79,7 +79,7 @@ function Find-SwaggerSpec {
     return $found?.FullName
 }
 
-# ── launchSettings discovery ──────────────────────────────────────────────────
+# -- launchSettings discovery --------------------------------------------------
 function Find-BaseUrl {
     $ls = Get-ChildItem -Path $scriptRoot -Recurse -Filter "launchSettings.json" `
             -ErrorAction SilentlyContinue |
@@ -96,7 +96,7 @@ function Find-BaseUrl {
         Select-Object -First 1
 }
 
-# ── Auth endpoint discovery ───────────────────────────────────────────────────
+# -- Auth endpoint discovery ---------------------------------------------------
 function Find-AuthEndpoint($spec) {
     # Look for common auth/login/token paths in the spec
     if (-not $spec) { return $null }
@@ -113,7 +113,7 @@ function Find-AuthEndpoint($spec) {
     } catch { return $null }
 }
 
-# ── Config helpers ────────────────────────────────────────────────────────────
+# -- Config helpers ------------------------------------------------------------
 $defaultConfig = [ordered]@{
     baseUrl           = ""
     openApiSpecPath   = ""
@@ -125,6 +125,7 @@ $defaultConfig = [ordered]@{
     failOnTestFailures= $true
     skipPaths         = @("auth")
     methods           = @("get","post","put","delete")
+    postOrder         = @() 
     showDetailedErrors= $true
     saveReports       = $true
     maxReports        = 10
@@ -148,10 +149,10 @@ function Save-Config($cfg) {
     $cfg | ConvertTo-Json -Depth 5 | Set-Content $configPath -Encoding UTF8
 }
 
-# ── First-run setup ───────────────────────────────────────────────────────────
+# -- First-run setup -----------------------------------------------------------
 function Invoke-Setup {
     Write-Header
-    Write-Host "  First-run setup — this saves to smoketest.config.json" -ForegroundColor White
+    Write-Host "  First-run setup -- this saves to smoketest.config.json" -ForegroundColor White
     Write-Blank
 
     $cfg = [ordered]@{} + $defaultConfig   # clone defaults
@@ -189,7 +190,7 @@ function Invoke-Setup {
         $cfg.authEndpoint = $foundAuth
     } else {
         Write-Warn "Could not auto-detect auth endpoint."
-        Write-Host "  → Auth endpoint (leave blank to skip auth, e.g. /auth/login): " -NoNewline -ForegroundColor White
+        Write-Host "  -> Auth endpoint (leave blank to skip auth, e.g. /auth/login): " -NoNewline -ForegroundColor White
         $cfg.authEndpoint = Read-Host
     }
 
@@ -198,11 +199,11 @@ function Invoke-Setup {
     # --- Credentials ---
     Write-Info "Credentials are read from environment variables at runtime."
     Write-Info "Default env var names: SMOKETEST_USERNAME / SMOKETEST_PASSWORD"
-    Write-Host "  → Username env var name (Enter to keep default): " -NoNewline -ForegroundColor White
+    Write-Host "  -> Username env var name (Enter to keep default): " -NoNewline -ForegroundColor White
     $uev = Read-Host
     if ($uev) { $cfg.usernameEnvVar = $uev }
 
-    Write-Host "  → Password env var name (Enter to keep default): " -NoNewline -ForegroundColor White
+    Write-Host "  -> Password env var name (Enter to keep default): " -NoNewline -ForegroundColor White
     $pev = Read-Host
     if ($pev) { $cfg.passwordEnvVar = $pev }
 
@@ -219,7 +220,7 @@ function Invoke-Setup {
     return $cfg
 }
 
-# ── Token acquisition ─────────────────────────────────────────────────────────
+# -- Token acquisition ---------------------------------------------------------
 function Get-Token($cfg) {
     # 1. Long-lasting token in config
     if ($cfg.accessToken -and $cfg.accessToken -ne "") {
@@ -227,9 +228,9 @@ function Get-Token($cfg) {
         return $cfg.accessToken
     }
 
-    # 2. No auth endpoint — skip
+    # 2. No auth endpoint -- skip
     if (-not $cfg.authEndpoint) {
-        Write-Warn "No auth endpoint configured — running without token."
+        Write-Warn "No auth endpoint configured -- running without token."
         return $null
     }
 
@@ -239,7 +240,7 @@ function Get-Token($cfg) {
 
     if (-not $username -or -not $password) {
         Write-Warn "Env vars '$($cfg.usernameEnvVar)' / '$($cfg.passwordEnvVar)' not set."
-        Write-Host "  → Username: " -NoNewline -ForegroundColor White
+        Write-Host "  -> Username: " -NoNewline -ForegroundColor White
         $username = Read-Host
         $password = Prompt-User "Password" -secret
     }
@@ -261,7 +262,7 @@ function Get-Token($cfg) {
     }
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 Write-Header
 
 # Sanity-check for testrunner
@@ -287,9 +288,12 @@ Write-Info "Spec     : $($cfg.openApiSpecPath)"
 Write-Info "Auth     : $(if ($cfg.authEndpoint) { $cfg.authEndpoint } else { '(none)' })"
 Write-Blank
 
-# Get token
+# Get credentials and token
+$username = [Environment]::GetEnvironmentVariable($cfg.usernameEnvVar)
+$password = [Environment]::GetEnvironmentVariable($cfg.passwordEnvVar)
 $token = Get-Token $cfg
 Write-Blank
+Write-Host "CFG postOrder: $($cfg.postOrder -join ', ')" -ForegroundColor Yellow
 
 # Build params for testrunner
 $params = @{
@@ -303,15 +307,16 @@ $params = @{
     saveReports       = [bool]$cfg.saveReports
     maxReports        = [int]$cfg.maxReports
     maxAgeDays        = [int]$cfg.maxAgeDays
+    postOrder         = [string[]]$cfg.postOrder   # ← add this
 }
 
 if ($token)    { $params.accessToken = $token }
 if ($username) { $params.username = $username }
 if ($password) { $params.password = $password }
 
-Write-Host "  ══════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "  ==========================================" -ForegroundColor Cyan
 Write-Host "  Running tests..." -ForegroundColor White
-Write-Host "  ══════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "  ==========================================" -ForegroundColor Cyan
 Write-Blank
 
 & $runnerPath @params

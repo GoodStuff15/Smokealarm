@@ -1,0 +1,32 @@
+{
+  "baseUrl": "http://localhost:5193",
+  "openApiSpecPath": ".\\swagger.json",
+  "accessToken": "",
+  "authEndpoint": "/api/Auth/login",
+  "usernameEnvVar": "username",
+  "passwordEnvVar": "password",
+  "reportLocation": ".\\reports\\",
+  "failOnTestFailures": true,
+  "skipPaths": [
+    "auth"
+  ],
+  "methods": [
+    "get",
+    "post",
+    "put",
+    "delete"
+  ],
+  "postOrder": [
+    "/api/Competitions",
+    "/api/Seasons",
+    "/api/Stages",
+    "/api/Schedules",
+    "/api/Participants",
+    "/api/ParticipantAssignment/stage/{stageId}",
+    "/api/ParticipantAssignment/group/{stageGroupId}"
+],
+  "showDetailedErrors": true,
+  "saveReports": true,
+  "maxReports": 10,
+  "maxAgeDays": 10
+}

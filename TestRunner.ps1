@@ -17,7 +17,8 @@ param(
     [bool]$showDetailedErrors = $true,
     [bool]$saveReports = $true,
     [int]$maxReports = 10,
-    [int]$maxAgeDays = 10
+    [int]$maxAgeDays = 10,
+    [string[]]$postOrder = @()
 
     )
 
@@ -43,7 +44,18 @@ if ([string]::IsNullOrWhiteSpace($keyword)) {
     } | Select-Object -Last 3
 
     foreach ($segment in ($candidates | Sort-Object { $candidates.IndexOf($_) } -Descending)) {
-        $parts = $segment -split '-'
+        $parts = @()
+        # Split on dashes
+        $parts += $segment -split '-'
+        # Split camelCase — reverse order so last word before Id is tried first
+        # e.g. competitionRoundStageId -> Stage, Round, competition (Stage wins)
+        $camelParts = [regex]::Matches($segment, '[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)') | 
+            ForEach-Object { $_.Value }
+        # Remove trailing 'Id'/'Ids' part and reverse so most specific (last) comes first
+        $camelParts = $camelParts | Where-Object { $_ -notmatch '^[Ii]ds?$' }
+        [array]::Reverse($camelParts)
+        $parts += $camelParts
+        
         foreach ($part in $parts) {
             $part = $part -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
             if ($part.Length -gt 2) {
@@ -177,61 +189,51 @@ function Resolve-RequestBody {
         [string]$path = ""
     )
 
-
     if (-not $body) { return $body }
-        # Handle raw array bodies
-if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
-    $firstItem = @($body)[0]
 
-    # If array contains objects/dicts, it's an array of complex DTOs — process normally
-    if ($firstItem -is [System.Collections.Specialized.OrderedDictionary] -or 
-        $firstItem -is [hashtable] -or
-        $firstItem -is [System.Management.Automation.PSCustomObject]) {
-        
-        $resolved = @($body | ForEach-Object { Resolve-RequestBody -body $_ -path $path })
-        return [object[]]@($resolved)
-    }
+    # Handle raw array bodies
+    if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
+        $firstItem = @($body)[0]
 
-    # Raw primitive array — inject captured IDs by path keyword
-    $segments = $path.Trim('/') -split '/'
+        if ($firstItem -is [System.Collections.Specialized.OrderedDictionary] -or 
+            $firstItem -is [hashtable] -or
+            $firstItem -is [System.Management.Automation.PSCustomObject]) {
+            $resolved = @($body | ForEach-Object { Resolve-RequestBody -body $_ -path $path })
+            return [object[]]@($resolved)
+        }
 
-    # Filter meaningful segments
-    $meaningfulSegments = $segments | Where-Object {
-        $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and
-        $_ -notmatch '^(create|add|update|remove|delete|get|list|register|by)$'
-    }
+        $segments = $path.Trim('/') -split '/'
+        $meaningfulSegments = $segments | Where-Object {
+            $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' -and
+            $_ -notmatch '^(create|add|update|remove|delete|get|list|register|by)$'
+        }
 
-    $keyword = $null
-    foreach ($segment in ($meaningfulSegments | Sort-Object { $meaningfulSegments.IndexOf($_) } -Descending)) {
-        if ($segment -match '-') {
-
-            $parts = $segment -split '-' | Where-Object {
-                $_ -notmatch '^(create|add|update|remove|delete|get|list|register|by)$' -and $_.Length -gt 2
-            }
-            if ($parts) {
-                $keyword = ($parts | Select-Object -Last 1) -replace 's$', ''
+        $keyword = $null
+        foreach ($segment in ($meaningfulSegments | Sort-Object { $meaningfulSegments.IndexOf($_) } -Descending)) {
+            if ($segment -match '-') {
+                $parts = $segment -split '-' | Where-Object {
+                    $_ -notmatch '^(create|add|update|remove|delete|get|list|register|by)$' -and $_.Length -gt 2
+                }
+                if ($parts) {
+                    $keyword = ($parts | Select-Object -Last 1) -replace 's$', ''
+                    break
+                }
+            } else {
+                $keyword = $segment -replace 's$', '' -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
                 break
             }
-        } else {
-            $keyword = $segment -replace 's$', '' -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-            break
         }
+
+        $keyword = $keyword.ToLower()
+        $matching = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+        if (-not $matching) {
+            $matching = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
+        }
+        if ($matching) {
+            return [object[]]@([int]$global:capturedIds[$matching])
+        }
+        return [object[]]@($body)
     }
-
-    $keyword = $keyword.ToLower()
-
-    $matching = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
-    if (-not $matching) {
-        $matching = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
-    }
-    
-    if ($matching) {
-
-        return [object[]]@([int]$global:capturedIds[$matching])
-    }
-
-    return [object[]]@($body)
-}
 
     $baseBody = $null
     if ($path -and $script:getResponses) {
@@ -245,6 +247,11 @@ if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
             Write-Host "  USING GET RESPONSE as base for PUT: $($resource.ToLower())" -ForegroundColor DarkCyan
         }
     }
+
+    # Determine current resource from path for self-reference detection
+    $currentResource = $path.Trim('/') -split '/' |
+        Where-Object { $_ -notmatch '^api$|^\{' -and $_ -notmatch '^\d+$' } |
+        Select-Object -First 1
 
     $obj = [ordered]@{}
 
@@ -279,24 +286,41 @@ if ($body -is [array] -or $body -is [System.Collections.Generic.List[object]]) {
             $arr = if ($matching) {
                 [int[]]@($matching | ForEach-Object { [int]$global:capturedIds[$_] })
             } else {
-                # Check if items are complex objects or primitives
                 $firstVal = @($value)[0]
                 if ($firstVal -is [int] -or $firstVal -is [long]) {
                     [int[]]@($value)
                 } else {
-                    # Complex objects — keep as object array
                     [object[]]@($value)
                 }
             }
             $obj[$key] = [object[]]@($arr)
+
         } elseif ($value -is [int] -or $value -is [long]) {
-            $keyword = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
-            $match   = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+            $keyword      = $key -replace '[Ii]ds$', '' -replace '[Ii]d$', ''
+            $shortKeyword = ([regex]::Match($key, '([A-Z][a-z]+)(?:[Ii]d)?$').Groups[1].Value).ToLower()
+
+            # Detect self-referential fields
+            $isSelfRef = $currentResource -and (
+                $shortKeyword -eq $currentResource.ToLower().TrimEnd('s') -or
+                $keyword -like "*$($currentResource.ToLower().TrimEnd('s'))*"
+            )
+
+            $match = $global:capturedIds.Keys | Where-Object { $_ -eq $shortKeyword } | Select-Object -First 1
+            if ($match -and [int]$global:capturedIds[$match] -eq 0) { $match = $null }
+            if (-not $match) {
+                $match = $global:capturedIds.Keys | Where-Object { $_ -eq $keyword } | Select-Object -First 1
+            }
             if (-not $match) {
                 $match = $global:capturedIds.Keys | Where-Object { $_ -like "*$keyword*" } | Select-Object -First 1
             }
-            $obj[$key] = if ($match) { [int]$global:capturedIds[$match] } else { $value }
 
+            $obj[$key] = if ($match) {
+                [int]$global:capturedIds[$match]
+            } elseif ($isSelfRef) {
+                $null  # self-referential and nothing captured yet — send null
+            } else {
+                $value
+            }
         } else {
             $obj[$key] = $value
         }
@@ -325,6 +349,8 @@ function Get-ResponseDtoName {
         if (-not $schema) { return $null }
 
         if ($schema.'$ref') {
+            $test = extractDtoName -refString "#/components/schemas/CreateScheduleRequest"
+            Write-Host "  Extracted DTO name from $($schema.'$ref'): $test" -ForegroundColor DarkCyan
             return extractDtoName -refString $schema.'$ref'
         }
 
@@ -337,9 +363,9 @@ function Get-ResponseDtoName {
     return $null
 }
 
+. "$PSScriptRoot\EndpointPriority.ps1" 
 . "$PSScriptRoot\ResolveEndpoints.ps1"
 . "$PSScriptRoot\TestFramework.ps1" -baseUrl $baseUrl -accessToken $accessToken
-. "$PSScriptRoot\EndpointPriority.ps1" 
 . "$PSScriptRoot\AuthFlow.ps1"
 . "$PSScriptRoot\EndpointWarnings.ps1"
 . "$PSScriptRoot\New-RequestOverrides.ps1"
@@ -358,7 +384,8 @@ if ($username -and $password) {
 # =====================
 $apiData  = Get-ApiEndpoints -openApiSpecPath $openApiSpecPath
 
-$endpoints = Get-SortedEndpoints -endpoints $apiData.Endpoints -schemas $apiData.Schemas
+$endpoints = Get-SortedEndpoints -endpoints $apiData.Endpoints -schemas $apiData.Schemas -postOrder $postOrder
+
 
     # ===
     # 2.5 Check for endpoint warnings
